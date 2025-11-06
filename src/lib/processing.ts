@@ -4,8 +4,8 @@
 export type ExtractedInvoice = {
   invoiceNumber: string | null;
   invoiceDate: string | null; // ISO date string
-  vendor: { name: string | null; gstin: string | null };
-  customer: { name: string | null; gstin: string | null };
+  vendor: { name: string | null; gstin: string | null; address?: string | null };
+  customer: { name: string | null; gstin: string | null; address?: string | null };
   lineItems: Array<{ description: string; quantity: number; rate: number; amount: number; hsn?: string | null }>;
   tax: { cgst: number; sgst: number; igst: number; totalTax: number };
   totalAmount: number;
@@ -39,8 +39,8 @@ export function simulateProcessing(fileName: string): { extracted: ExtractedInvo
   const extracted: ExtractedInvoice = {
     invoiceNumber: `INV-${Date.now().toString().slice(-6)}`,
     invoiceDate: isoDate,
-    vendor: { name: isPurchase ? 'ABC Supplies' : 'Your Company', gstin: '27ABCDE1234F1Z5' },
-    customer: { name: isSales ? 'XYZ Retail' : 'Your Company', gstin: '27ABCDE1234F1Z5' },
+    vendor: { name: isPurchase ? 'ABC Supplies' : 'Your Company', gstin: '27ABCDE1234F1Z5', address: '123 Business Street, Pune' },
+    customer: { name: isSales ? 'XYZ Retail' : 'Your Company', gstin: '27ABCDE1234F1Z5', address: '789 Corporate Avenue, Mumbai' },
     lineItems: [
       { description: 'Goods / Services', quantity: 1, rate: baseAmount, amount: baseAmount, hsn: '9997' },
     ],

@@ -23,7 +23,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import BalanceSheet from "@/components/BalanceSheet";
 import ProfitLossStatement from "@/components/ProfitLossStatement";
-import { generateBalanceSheet, generateProfitLoss, calculateFinancialMetrics, formatINR } from "@/lib/financial";
+import { generateSimpleBalanceSheet, generateProfitLoss, calculateFinancialMetrics, formatINR } from "@/lib/financial";
 import PageHeader from "@/components/PageHeader";
 
 export default function Financials() {
@@ -78,6 +78,7 @@ export default function Financials() {
         .order("transaction_date", { ascending: false });
 
       if (error) throw error;
+      console.log('Financial records fetched:', data); // Debug log
       setRecords(data || []);
     } catch (error: any) {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -116,7 +117,7 @@ export default function Financials() {
   const selectedClientData = clients.find(c => c.id === selectedClient);
   const { startDate, endDate } = getDateRange();
   
-  const balanceSheetData = generateBalanceSheet(records, endDate);
+  const balanceSheetData = generateSimpleBalanceSheet(records, endDate);
   const profitLossData = generateProfitLoss(records, startDate, endDate);
   const metrics = calculateFinancialMetrics(records, startDate, endDate);
 

@@ -20,22 +20,28 @@ interface BalanceSheetProps {
     equity: { [key: string]: number };
   };
   status?: 'draft' | 'reviewed' | 'final';
+  totals?: {
+    assets: number;
+    liabilities: number;
+    equity: number;
+  };
 }
 
-export default function BalanceSheet({ clientName, asOfDate, data, status = 'draft' }: BalanceSheetProps) {
+export default function BalanceSheet({ clientName, asOfDate, data, status = 'draft', totals }: BalanceSheetProps) {
   const calculateTotal = (obj: { [key: string]: number }) => {
     return Object.values(obj).reduce((sum, val) => sum + val, 0);
   };
 
+  // Use provided totals or calculate from data
   const totalCurrentAssets = calculateTotal(data.assets.current);
   const totalNonCurrentAssets = calculateTotal(data.assets.nonCurrent);
-  const totalAssets = totalCurrentAssets + totalNonCurrentAssets;
+  const totalAssets = totals?.assets || (totalCurrentAssets + totalNonCurrentAssets);
 
   const totalCurrentLiabilities = calculateTotal(data.liabilities.current);
   const totalNonCurrentLiabilities = calculateTotal(data.liabilities.nonCurrent);
-  const totalLiabilities = totalCurrentLiabilities + totalNonCurrentLiabilities;
+  const totalLiabilities = totals?.liabilities || (totalCurrentLiabilities + totalNonCurrentLiabilities);
 
-  const totalEquity = calculateTotal(data.equity);
+  const totalEquity = totals?.equity || calculateTotal(data.equity);
 
   const getStatusBadge = () => {
     const variants: { [key: string]: "default" | "secondary" | "outline" } = {

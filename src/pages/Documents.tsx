@@ -65,6 +65,8 @@ export default function Documents() {
         .select("*, clients!inner(*)")
         .eq("clients.accountant_id", user.id)
         .order("created_at", { ascending: false });
+      
+      console.log('Documents fetched:', docsData); // Debug log
 
       setClients(clientsData || []);
       setDocuments(docsData || []);
@@ -83,19 +85,34 @@ export default function Documents() {
     if (doc.status === "completed") return;
     setProcessingDocId(doc.id);
     try {
+      console.log('🔄 Starting document processing for:', doc.id);
+      
       // set status to processing
       await supabase.from("documents").update({ status: "processing" }).eq("id", doc.id);
+      console.log('📝 Document status set to processing');
 
       // process via backend (or fallback simulation)
+      console.log('⚙️ Calling processDocument function...');
       const { extracted, suggestion } = await processDocument({ id: doc.id, file_name: doc.file_name });
+      console.log('✅ Document processed. Extracted data:', { extracted, suggestion });
 
       // update document with extracted data and mark completed
       await supabase
         .from("documents")
         .update({ status: "completed", extracted_data: extracted, updated_at: new Date().toISOString() })
         .eq("id", doc.id);
+      console.log('💾 Document updated with extracted data');
 
       // create financial record
+      console.log('💰 Creating financial record with data:', {
+        client_id: doc.client_id,
+        document_id: doc.id,
+        record_type: suggestion.record_type,
+        amount: suggestion.amount,
+        description: suggestion.description,
+        category: suggestion.category,
+        transaction_date: suggestion.transaction_date,
+      });
       await supabase.from("financial_records").insert({
         client_id: doc.client_id,
         document_id: doc.id,
@@ -105,35 +122,46 @@ export default function Documents() {
         category: suggestion.category,
         transaction_date: suggestion.transaction_date,
       });
+      console.log('✅ Financial record created');
 
       // derive invoice from extracted data and upsert into invoices table
       try {
+        console.log('🧾 Creating invoice record...');
         const { invoice } = await extractInvoice(extracted);
         const sb = supabase as any;
-        await sb.from("invoices").insert({
-          document_id: doc.id,
-          client_id: doc.client_id,
-          invoice_type: invoice.invoice_type,
-          invoice_number: invoice.invoice_number,
-          invoice_date: invoice.invoice_date,
-          due_date: invoice.due_date || null,
-          vendor_name: invoice.vendor_name,
-          vendor_gstin: invoice.vendor_gstin,
-          customer_name: invoice.customer_name,
-          customer_gstin: invoice.customer_gstin,
-          line_items: invoice.line_items,
-          tax_details: invoice.tax_details,
-          total_amount: invoice.total_amount,
-          currency: invoice.currency || "INR",
-          payment_status: invoice.payment_status || "unpaid",
-        });
+
+        // Only create invoice records for sales/purchase documents
+        if (invoice.invoice_type === 'sales' || invoice.invoice_type === 'purchase') {
+          await sb.from("invoices").insert({
+            document_id: doc.id,
+            client_id: doc.client_id,
+            invoice_type: invoice.invoice_type,
+            invoice_number: invoice.invoice_number,
+            invoice_date: invoice.invoice_date,
+            due_date: invoice.due_date || null,
+            vendor_name: invoice.vendor_name,
+            vendor_gstin: invoice.vendor_gstin,
+            customer_name: invoice.customer_name,
+            customer_gstin: invoice.customer_gstin,
+            line_items: invoice.line_items,
+            tax_details: invoice.tax_details,
+            total_amount: invoice.total_amount,
+            currency: invoice.currency || "INR",
+            payment_status: invoice.payment_status || "unpaid",
+          });
+          console.log('✅ Invoice record created');
+        } else {
+          console.log('ℹ️ Skipping invoice creation - not a sales/purchase document');
+        }
       } catch (e) {
         // Non-fatal: continue even if invoice insert fails
-        console.error("Invoice upsert failed", e);
+        console.error("Invoice creation failed - continuing without invoice record:", e.message);
+        console.log("💡 Financial records were created successfully");
       }
 
       // increment client's completed_documents (read-modify-write)
       {
+        console.log('📈 Updating client document count...');
         const { data: clientRow } = await supabase
           .from("clients")
           .select("completed_documents")
@@ -144,11 +172,13 @@ export default function Documents() {
           .from("clients")
           .update({ completed_documents: current + 1 })
           .eq("id", doc.client_id);
+        console.log('✅ Client document count updated');
       }
 
       toast({ title: "Processed", description: "Document processed and financial record created." });
       fetchData();
     } catch (error: any) {
+      console.error('❌ Document processing failed:', error);
       toast({ title: "Error", description: error.message, variant: "destructive" });
     } finally {
       setProcessingDocId(null);

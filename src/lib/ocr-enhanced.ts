@@ -1,7 +1,8 @@
 // Enhanced OCR processing with pre-processing and LLM integration
 // This module provides production-ready OCR processing with Gemini AI
 
-const GEMINI_API_KEY = (import.meta as any).env?.VITE_GEMINI_API_KEY as string | undefined;
+const GEMINI_API_KEY = (import.meta as any).env?.VITE_GEMINI_API_KEY ||
+                      (import.meta as any).env?.GOOGLE_AI_API_KEY as string | undefined;
 const BACKEND_URL = (import.meta as any).env?.VITE_BACKEND_URL as string | undefined;
 
 export interface OCRResult {

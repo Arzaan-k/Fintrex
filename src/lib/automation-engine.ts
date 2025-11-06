@@ -3,9 +3,11 @@
 
 import { supabase } from '@/integrations/supabase/client';
 import { processDocumentComplete, ExtractedData } from '@/lib/ocr-enhanced';
-import { 
-  matchClientByPhone, 
-  matchClientByEmail, 
+import { processDocumentWithTesseract } from '@/lib/ocr-tesseract';
+import { processDocumentWithDeepSeek, processDocumentWithDeepSeekAI, isDeepSeekAvailable } from '@/lib/ocr-deepseek';
+import {
+  matchClientByPhone,
+  matchClientByEmail,
   matchClientByIdentifiers,
   createTemporaryClient,
   updateClientFromKYCData,
@@ -55,9 +57,96 @@ export async function processIncomingDocument(
 
     console.log('✓ Accountant identified:', accountant.id);
 
-    // Step 2: Process document with OCR/LLM
-    const extracted = await processDocumentComplete(incoming.file);
-    console.log('✓ Document processed. Type:', extracted.classification.type);
+    // Step 2: Advanced OCR processing with multi-layer fallback
+    // Chain: Tesseract -> DeepSeek -> LLM -> Basic fallback
+    let extracted: ExtractedData;
+    let processingMethod = 'unknown';
+
+    try {
+      console.log('🔍 Processing with Tesseract OCR (primary)...');
+      const tesseractResult = await processDocumentWithTesseract(incoming.file, incoming.file.name);
+
+      // Convert Tesseract result to ExtractedData format
+      extracted = {
+        classification: {
+          type: tesseractResult.documentType,
+          confidence: tesseractResult.ocrResult.confidence,
+        },
+        fields: tesseractResult.extractedData,
+        rawText: tesseractResult.ocrResult.text,
+        confidence: tesseractResult.ocrResult.confidence
+      };
+
+      processingMethod = 'tesseract';
+      console.log('✓ Document processed with Tesseract. Type:', extracted.classification.type);
+
+    } catch (tesseractError) {
+      console.log('⚠️ Tesseract OCR failed, trying DeepSeek Vision:', tesseractError);
+
+      try {
+        // Check if DeepSeek is available
+        const deepSeekAvailable = await isDeepSeekAvailable();
+
+        if (deepSeekAvailable) {
+          console.log('🧠 Processing with DeepSeek AI (OCR + AI Extraction)...');
+          const deepSeekResult = await processDocumentWithDeepSeekAI(incoming.file, incoming.file.name);
+
+          // Use AI-extracted data if available, otherwise use regex-extracted data
+          const finalExtractedData = deepSeekResult.aiExtraction || deepSeekResult.extractedData;
+
+          // Convert DeepSeek result to ExtractedData format
+          extracted = {
+            classification: {
+              type: deepSeekResult.documentType,
+              confidence: deepSeekResult.ocrResult.confidence,
+            },
+            fields: finalExtractedData,
+            rawText: deepSeekResult.ocrResult.text,
+            confidence: deepSeekResult.ocrResult.confidence
+          };
+
+          processingMethod = deepSeekResult.aiExtraction ? 'deepseek_ai' : 'deepseek_regex';
+          console.log(`✓ Document processed with DeepSeek ${processingMethod.includes('ai') ? 'AI' : 'Regex'}. Type:`, extracted.classification.type);
+        } else {
+          throw new Error('DeepSeek not available');
+        }
+
+      } catch (deepSeekError) {
+        console.log('⚠️ DeepSeek OCR failed, falling back to LLM processing:', deepSeekError);
+
+        try {
+          console.log('🤖 Processing with LLM (Gemini)...');
+          extracted = await processDocumentComplete(incoming.file);
+          processingMethod = 'llm';
+          console.log('✓ Document processed with LLM. Type:', extracted.classification.type);
+
+        } catch (llmError) {
+          console.log('❌ All OCR methods failed, using basic fallback');
+
+          // Basic fallback - just store the document
+          extracted = {
+            classification: {
+              type: 'other',
+              confidence: 0.1,
+            },
+            fields: {
+              filename: incoming.file.name,
+              error: 'All OCR processing methods failed',
+              tesseractError: tesseractError instanceof Error ? tesseractError.message : 'Unknown',
+              deepSeekError: deepSeekError instanceof Error ? deepSeekError.message : 'Unknown',
+              llmError: llmError instanceof Error ? llmError.message : 'Unknown'
+            },
+            rawText: `Failed to process ${incoming.file.name} with all available OCR methods`,
+            confidence: 0.1
+          };
+
+          processingMethod = 'fallback';
+        }
+      }
+    }
+
+    // Log the processing method used
+    console.log(`🔄 OCR Processing completed using: ${processingMethod.toUpperCase()}`);
 
     // Step 3: Match or create client
     const clientMatch = await findOrCreateClient(incoming, extracted, accountant.id);
@@ -359,6 +448,9 @@ async function handleInvoiceDocument(
 
     // Auto-create journal entry
     await createJournalEntry(clientId, invoiceType, amount, transactionDate, fields);
+    
+    // Auto-generate balance sheet
+    await generateAndUpdateBalanceSheet(clientId);
 
     return {
       success: true,
@@ -499,6 +591,34 @@ async function createJournalEntry(
   } catch (error) {
     console.error('Error creating journal entry:', error);
   }
+}
+
+/**
+ * Generate and update balance sheet for a client
+ */
+async function generateAndUpdateBalanceSheet(clientId: string) {
+  try {
+    // Use the database function to generate/update balance sheet
+    const { error } = await supabase.rpc('update_client_balance_sheet', {
+      p_client_id: clientId
+    });
+    
+    if (error) {
+      console.error('Error updating balance sheet:', error);
+      return;
+    }
+
+    console.log('✓ Balance sheet updated for client:', clientId);
+  } catch (error) {
+    console.error('Error generating balance sheet:', error);
+  }
+}
+
+/**
+ * Calculate total from an object of numbers
+ */
+function calculateObjectTotal(obj: { [key: string]: number }): number {
+  return Object.values(obj).reduce((sum, value) => sum + value, 0);
 }
 
 /**

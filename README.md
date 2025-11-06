@@ -44,8 +44,8 @@ Fintrex is an AI-powered accounting automation platform designed for Indian acco
 - **Real-time**: Supabase Realtime
 
 ### AI/ML
-- **OCR**: Google Gemini Vision API
-- **LLM**: Google Gemini 1.5 Flash
+- **OCR**: Multi-layered approach (Tesseract + DeepSeek Vision + Google Gemini)
+- **LLM**: Google Gemini 1.5 Flash + DeepSeek Chat
 - **Document Classification**: AI-powered categorization
 - **Data Extraction**: Structured field extraction
 
@@ -53,6 +53,87 @@ Fintrex is an AI-powered accounting automation platform designed for Indian acco
 - **WhatsApp**: WhatsApp Business API (via proxy)
 - **Email**: SMTP/IMAP (via backend service)
 - **Payment**: Razorpay (planned)
+
+## 🔧 Configuration
+
+### Environment Variables
+
+Create a `.env` file in the root directory with the following variables:
+
+```bash
+# Supabase Configuration
+VITE_SUPABASE_URL=your_supabase_url
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+
+# Optional: Backend URL (for server-side processing)
+VITE_BACKEND_URL=https://your-backend-url.com
+
+# AI/ML Configuration
+VITE_GEMINI_API_KEY=your_google_gemini_api_key
+VITE_GOOGLE_VISION_API_KEY=your_google_cloud_vision_api_key
+
+# DeepSeek OCR Configuration (Advanced)
+VITE_DEEPSEEK_API_KEY=your_deepseek_api_key
+VITE_DEEPSEEK_BASE_URL=https://api.deepseek.com
+VITE_DEEPSEEK_MODEL=deepseek-chat
+```
+
+### DeepSeek OCR Setup
+
+For enhanced OCR accuracy, you can configure DeepSeek Vision OCR:
+
+1. **Get DeepSeek API Key**: Visit [DeepSeek Platform](https://platform.deepseek.com/) and create an account
+2. **Add to Environment**: Set `VITE_DEEPSEEK_API_KEY` in your `.env` file
+
+### **Google Cloud Vision API Setup (High-Accuracy OCR)**
+
+**Why Google Cloud Vision?**
+- **98%+ accuracy** for document OCR
+- Specialized for invoices, receipts, and business documents
+- Handles multiple languages and complex layouts
+- Industry-leading OCR technology
+
+**Setup Steps:**
+1. **Create Google Cloud Project**:
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a new project or select existing one
+
+2. **Enable Cloud Vision API**:
+   - Navigate to "APIs & Services" → "Library"
+   - Search for "Cloud Vision API"
+   - Click "Enable"
+
+3. **Create API Key**:
+   - Go to "APIs & Services" → "Credentials"
+   - Click "Create Credentials" → "API Key"
+   - Copy the generated API key
+
+4. **Restrict API Key** (Security Best Practice):
+   - Click on your API key in the credentials list
+   - Under "Key restrictions" → Select "Restrict key"
+   - Add "Cloud Vision API" to restrictions
+   - Save changes
+
+5. **Add to Environment**:
+   ```bash
+   # Add this to your .env file
+   VITE_GOOGLE_VISION_API_KEY=your_api_key_here
+   ```
+
+6. **Test the Integration**:
+   - Restart your development server
+   - Upload a document to see "GOOGLE VISION" in the logs
+
+**Pricing**: 1,000 images/month free, then $1.50 per 1,000 images
+
+**Note**: Your app will automatically use Google Cloud Vision as the tertiary OCR method when available!
+3. **Test Configuration**: Use the OCR Test Panel to verify DeepSeek integration
+
+**OCR Processing Chain (Best to Fastest):**
+1. **Primary**: Gemini AI OCR (highest accuracy, already configured)
+2. **Secondary**: DeepSeek Vision OCR (high accuracy, AI-powered)
+3. **Tertiary**: Google Cloud Vision API (98%+ accuracy, cloud-based)
+4. **Fallback**: Enhanced Tesseract OCR (fast, offline, cost-free)
 
 ## 📦 Installation
 
