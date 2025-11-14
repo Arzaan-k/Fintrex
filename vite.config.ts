@@ -16,6 +16,11 @@ export default defineConfig(({ mode }) => ({
       ".lovable.dev"
     ],
   },
+  preview: {
+    host: "0.0.0.0",
+    port: 8080,
+    strictPort: true,
+  },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
   resolve: {
     alias: {
@@ -24,5 +29,17 @@ export default defineConfig(({ mode }) => ({
   },
   optimizeDeps: {
     include: ['pdfjs-dist']
+  },
+  build: {
+    outDir: 'dist',
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'ui-vendor': ['@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu', '@radix-ui/react-select'],
+        }
+      }
+    }
   }
 }));
