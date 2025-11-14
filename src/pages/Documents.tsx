@@ -32,7 +32,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { processDocument, extractInvoice } from "@/lib/backend";
+import { processDocument, extractInvoice } from "@/lib/backend-secure";
 import PageHeader from "@/components/PageHeader";
 
 export default function Documents() {
@@ -104,56 +104,103 @@ export default function Documents() {
       console.log('💾 Document updated with extracted data');
 
       // create financial record
-      console.log('💰 Creating financial record with data:', {
+      // Validate required fields
+      if (!doc.id) {
+        throw new Error('Document ID is missing - cannot create financial record');
+      }
+      if (!doc.client_id) {
+        throw new Error('Client ID is missing - cannot create financial record');
+      }
+      if (!suggestion.amount || suggestion.amount <= 0) {
+        console.warn('⚠️ Invalid amount, using 0:', suggestion.amount);
+      }
+
+      // Ensure date is in YYYY-MM-DD format (strip time if present)
+      const transactionDate = suggestion.transaction_date
+        ? suggestion.transaction_date.split('T')[0]
+        : new Date().toISOString().slice(0, 10);
+
+      const financialRecord = {
         client_id: doc.client_id,
         document_id: doc.id,
-        record_type: suggestion.record_type,
-        amount: suggestion.amount,
-        description: suggestion.description,
-        category: suggestion.category,
-        transaction_date: suggestion.transaction_date,
-      });
-      await supabase.from("financial_records").insert({
-        client_id: doc.client_id,
-        document_id: doc.id,
-        record_type: suggestion.record_type,
-        amount: suggestion.amount,
-        description: suggestion.description,
-        category: suggestion.category,
-        transaction_date: suggestion.transaction_date,
-      });
-      console.log('✅ Financial record created');
+        record_type: suggestion.record_type || 'expense',
+        amount: suggestion.amount || 0,
+        description: suggestion.description || `Document ${doc.file_name}`,
+        category: suggestion.category || 'Uncategorized',
+        transaction_date: transactionDate,
+      };
+
+      console.log('💰 Creating financial record with data:', financialRecord);
+
+      const { error: financialError } = await supabase
+        .from("financial_records")
+        .insert(financialRecord);
+
+      if (financialError) {
+        console.error('❌ Financial record creation failed:', financialError);
+        throw new Error(`Failed to create financial record: ${financialError.message}`);
+      }
+
+      console.log('✅ Financial record created successfully');
 
       // derive invoice from extracted data and upsert into invoices table
       try {
         console.log('🧾 Creating invoice record...');
-        const { invoice } = await extractInvoice(extracted);
-        const sb = supabase as any;
 
-        // Only create invoice records for sales/purchase documents
-        if (invoice.invoice_type === 'sales' || invoice.invoice_type === 'purchase') {
-          await sb.from("invoices").insert({
-            document_id: doc.id,
-            client_id: doc.client_id,
-            invoice_type: invoice.invoice_type,
-            invoice_number: invoice.invoice_number,
-            invoice_date: invoice.invoice_date,
-            due_date: invoice.due_date || null,
-            vendor_name: invoice.vendor_name,
-            vendor_gstin: invoice.vendor_gstin,
-            customer_name: invoice.customer_name,
-            customer_gstin: invoice.customer_gstin,
-            line_items: invoice.line_items,
-            tax_details: invoice.tax_details,
-            total_amount: invoice.total_amount,
-            currency: invoice.currency || "INR",
-            payment_status: invoice.payment_status || "unpaid",
-          });
-          console.log('✅ Invoice record created');
-        } else {
-          console.log('ℹ️ Skipping invoice creation - not a sales/purchase document');
+        // Validate that we have the necessary data
+        if (!doc.id || !doc.client_id) {
+          throw new Error(`Missing required IDs: doc.id=${doc.id}, client_id=${doc.client_id}`);
         }
-      } catch (e) {
+
+        // Map extracted data to invoice format
+        const invoiceType = suggestion.record_type === 'income' ? 'sales' : 'purchase';
+
+        // Build invoice record from extracted data
+        const invoiceRecord = {
+          document_id: doc.id,
+          client_id: doc.client_id,
+          invoice_type: invoiceType,
+          invoice_number: extracted.invoiceNumber || `DOC-${Date.now().toString().slice(-6)}`,
+          invoice_date: extracted.invoiceDate || new Date().toISOString().slice(0, 10),
+          due_date: extracted.dueDate || null,
+          vendor_name: extracted.vendor?.name || null,
+          vendor_gstin: extracted.vendor?.gstin || null,
+          vendor_address: extracted.vendor?.address || null,
+          customer_name: extracted.customer?.name || null,
+          customer_gstin: extracted.customer?.gstin || null,
+          customer_address: extracted.customer?.address || null,
+          line_items: extracted.lineItems || [],
+          subtotal: extracted.subtotal || 0,
+          cgst: extracted.tax?.cgst || 0,
+          sgst: extracted.tax?.sgst || 0,
+          igst: extracted.tax?.igst || 0,
+          cess: extracted.tax?.cess || 0,
+          total_amount: extracted.totalAmount || 0,
+          currency: extracted.currency || "INR",
+          payment_status: "unpaid",
+          extraction_confidence: extracted.confidence || 0,
+          auto_generated: true,
+        };
+
+        console.log('📋 Invoice record prepared:', {
+          type: invoiceRecord.invoice_type,
+          number: invoiceRecord.invoice_number,
+          amount: invoiceRecord.total_amount,
+          vendor: invoiceRecord.vendor_name,
+        });
+
+        // Insert invoice record
+        const { error: invoiceError } = await supabase
+          .from("invoices")
+          .insert(invoiceRecord);
+
+        if (invoiceError) {
+          console.error('❌ Invoice insert error:', invoiceError);
+          throw new Error(`Failed to create invoice: ${invoiceError.message}`);
+        }
+
+        console.log('✅ Invoice record created successfully');
+      } catch (e: any) {
         // Non-fatal: continue even if invoice insert fails
         console.error("Invoice creation failed - continuing without invoice record:", e.message);
         console.log("💡 Financial records were created successfully");

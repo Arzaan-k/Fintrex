@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
-import { 
-  LayoutDashboard, 
-  Users, 
-  FileText, 
+import {
+  LayoutDashboard,
+  Users,
+  FileText,
   Receipt,
   TrendingUp,
   Settings,
@@ -11,7 +11,8 @@ import {
   Search,
   Menu,
   X,
-  LogOut
+  LogOut,
+  ClipboardCheck
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +26,7 @@ const baseNavigation = [
   { name: "Clients", href: "/clients", icon: Users },
   { name: "Documents", href: "/documents", icon: FileText },
   { name: "Invoices", href: "/invoices", icon: Receipt },
+  { name: "Review Queue", href: "/review-queue", icon: ClipboardCheck },
   { name: "GST Reports", href: "/gst-reports", icon: FileText },
   { name: "Financials", href: "/financials", icon: TrendingUp },
   { name: "Settings", href: "/settings", icon: Settings },
