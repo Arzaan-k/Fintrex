@@ -608,35 +608,76 @@ async function processDocument(
 
 serve(async (req: Request): Promise<Response> => {
   const u = new URL(req.url);
+
+  // ============================================
+  // WEBHOOK VERIFICATION (GET)
+  // ============================================
   if (req.method === "GET") {
-    // WhatsApp webhook verification
     const mode = u.searchParams.get("hub.mode");
     const token = u.searchParams.get("hub.verify_token");
     const challenge = u.searchParams.get("hub.challenge");
 
-    console.log("[webhook-verify] mode:", mode, "token_present:", !!token, "challenge_present:", !!challenge);
+    console.log("=== WEBHOOK VERIFICATION REQUEST ===");
+    console.log("Mode:", mode);
+    console.log("Token received:", token ? `${token.substring(0, 5)}...` : "NONE");
+    console.log("Token expected:", VERIFY_TOKEN ? `${VERIFY_TOKEN.substring(0, 5)}...` : "NOT SET");
+    console.log("Challenge:", challenge ? "present" : "MISSING");
+    console.log("====================================");
 
-    if (mode === "subscribe" && token && challenge) {
-      if (!VERIFY_TOKEN) {
-        console.error("[webhook-verify] VERIFY_TOKEN not configured");
-        return new Response("Server configuration error", { status: 500 });
-      }
-
-      if (token !== VERIFY_TOKEN) {
-        console.error("[webhook-verify] Token mismatch");
-        return new Response("Forbidden", { status: 403 });
-      }
-
-      console.log("[webhook-verify] ✅ Verification successful");
-      // CRITICAL: Must return challenge as plain text
-      return new Response(challenge, {
-        status: 200,
+    // Check if VERIFY_TOKEN is configured
+    if (!VERIFY_TOKEN || VERIFY_TOKEN.trim() === "") {
+      console.error("❌ VERIFY_TOKEN is NOT set in environment variables!");
+      console.error("Set it using: supabase secrets set WHATSAPP_VERIFY_TOKEN=your_token");
+      return new Response("VERIFY_TOKEN not configured in environment", {
+        status: 500,
         headers: { "Content-Type": "text/plain" }
       });
     }
 
-    console.error("[webhook-verify] Invalid verification request");
-    return new Response("Bad Request", { status: 400 });
+    // Validate request has all required parameters
+    if (!mode || !token || !challenge) {
+      console.error("❌ Missing required parameters");
+      console.error("Received - mode:", mode, "token:", !!token, "challenge:", !!challenge);
+      return new Response("Missing required parameters (hub.mode, hub.verify_token, hub.challenge)", {
+        status: 400,
+        headers: { "Content-Type": "text/plain" }
+      });
+    }
+
+    // Check mode is 'subscribe'
+    if (mode !== "subscribe") {
+      console.error("❌ Invalid mode:", mode, "(expected: subscribe)");
+      return new Response("Invalid hub.mode", {
+        status: 400,
+        headers: { "Content-Type": "text/plain" }
+      });
+    }
+
+    // Verify token matches (trim whitespace)
+    const receivedToken = token.trim();
+    const expectedToken = VERIFY_TOKEN.trim();
+
+    if (receivedToken !== expectedToken) {
+      console.error("❌ Token mismatch!");
+      console.error("Received:", receivedToken.substring(0, 10) + "...");
+      console.error("Expected:", expectedToken.substring(0, 10) + "...");
+      console.error("Received length:", receivedToken.length);
+      console.error("Expected length:", expectedToken.length);
+      return new Response("Verify token mismatch", {
+        status: 403,
+        headers: { "Content-Type": "text/plain" }
+      });
+    }
+
+    // ✅ SUCCESS - Return challenge
+    console.log("✅ VERIFICATION SUCCESSFUL - Returning challenge:", challenge);
+    return new Response(challenge, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/plain",
+        "Access-Control-Allow-Origin": "*"
+      }
+    });
   }
 
   if (req.method !== "POST") return bad({ error: "method not allowed" }, 405);
