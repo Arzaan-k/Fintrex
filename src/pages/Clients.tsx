@@ -28,7 +28,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Search, Filter, Loader2 } from "lucide-react";
+import { Plus, Search, Filter, Loader2, Pencil, Trash2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { sendTemplate } from "@/lib/whatsapp";
@@ -53,6 +53,10 @@ export default function Clients() {
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [kycOpen, setKycOpen] = useState(false);
   const [kycClientId, setKycClientId] = useState<string | null>(null);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [editingClient, setEditingClient] = useState<any>(null);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [deletingClient, setDeletingClient] = useState<any>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
 
@@ -84,14 +88,45 @@ export default function Clients() {
     }
   };
 
+  const normalizePhoneNumber = (phone: string): string => {
+    // Remove all spaces and dashes
+    let cleaned = phone.replace(/[\s-]/g, '');
+
+    // If it starts with +91, keep it as is
+    if (cleaned.startsWith('+91')) {
+      return cleaned;
+    }
+
+    // If it starts with 91 (no +), add the +
+    if (cleaned.startsWith('91') && cleaned.length === 12) {
+      return '+' + cleaned;
+    }
+
+    // If it's a 10-digit number, add +91
+    if (cleaned.length === 10 && !cleaned.startsWith('0')) {
+      return '+91' + cleaned;
+    }
+
+    // If it starts with 0, remove it and add +91
+    if (cleaned.startsWith('0') && cleaned.length === 11) {
+      return '+91' + cleaned.substring(1);
+    }
+
+    // Return as is if it doesn't match any pattern
+    return cleaned;
+  };
+
   const handleAddClient = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
+      const normalizedPhone = normalizePhoneNumber(newClient.phone_number);
+
       const { error } = await supabase.from("clients").insert({
         ...newClient,
+        phone_number: normalizedPhone,
         accountant_id: user.id,
       });
 
@@ -119,6 +154,82 @@ export default function Clients() {
         variant: "destructive",
       });
     }
+  };
+
+  const handleEditClient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      if (!editingClient) return;
+
+      const normalizedPhone = normalizePhoneNumber(editingClient.phone_number);
+
+      const { error } = await supabase
+        .from("clients")
+        .update({
+          business_name: editingClient.business_name,
+          contact_person: editingClient.contact_person,
+          email: editingClient.email,
+          phone_number: normalizedPhone,
+          gst_number: editingClient.gst_number,
+          pan_number: editingClient.pan_number,
+        })
+        .eq("id", editingClient.id);
+
+      if (error) throw error;
+
+      toast({
+        title: "Success",
+        description: "Client updated successfully",
+      });
+
+      setIsEditDialogOpen(false);
+      setEditingClient(null);
+      fetchClients();
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDeleteClient = async () => {
+    try {
+      if (!deletingClient) return;
+
+      const { error } = await supabase
+        .from("clients")
+        .delete()
+        .eq("id", deletingClient.id);
+
+      if (error) throw error;
+
+      toast({
+        title: "Success",
+        description: "Client deleted successfully",
+      });
+
+      setIsDeleteDialogOpen(false);
+      setDeletingClient(null);
+      fetchClients();
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const openEditDialog = (client: any) => {
+    setEditingClient({ ...client });
+    setIsEditDialogOpen(true);
+  };
+
+  const openDeleteDialog = (client: any) => {
+    setDeletingClient(client);
+    setIsDeleteDialogOpen(true);
   };
 
   const filteredClients = clients.filter((client) => {
@@ -232,7 +343,11 @@ export default function Clients() {
                       setNewClient({ ...newClient, phone_number: e.target.value })
                     }
                     required
+                    placeholder="+917021307474 or 7021307474"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Format: +91XXXXXXXXXX (will be auto-formatted for WhatsApp)
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="email">Email</Label>
@@ -341,42 +456,59 @@ export default function Clients() {
                   <TableCell>
                     {client.completed_documents}/{client.total_documents}
                   </TableCell>
-                  <TableCell className="text-right space-x-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => navigate(`/client-dashboard?clientId=${client.id}`)}
-                    >
-                      View
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => { setKycClientId(client.id); setKycOpen(true); }}
-                    >
-                      KYC
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => handleSendKycRequest(client)}
-                      disabled={sendingId === client.id}
-                    >
-                      {sendingId === client.id ? (
-                        <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sending...</>
-                      ) : (
-                        <>Send KYC</>
-                      )}
-                    </Button>
-                    {client.status === "kyc_pending" && (
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => navigate(`/client-dashboard?clientId=${client.id}`)}
+                      >
+                        View
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openEditDialog(client)}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openDeleteDialog(client)}
+                        className="text-destructive hover:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => handleMarkKycComplete(client)}
+                        onClick={() => { setKycClientId(client.id); setKycOpen(true); }}
                       >
-                        Mark KYC Complete
+                        KYC
                       </Button>
-                    )}
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => handleSendKycRequest(client)}
+                        disabled={sendingId === client.id}
+                      >
+                        {sendingId === client.id ? (
+                          <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sending...</>
+                        ) : (
+                          <>Send KYC</>
+                        )}
+                      </Button>
+                      {client.status === "kyc_pending" && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleMarkKycComplete(client)}
+                        >
+                          Mark KYC Complete
+                        </Button>
+                      )}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -385,6 +517,135 @@ export default function Clients() {
         )}
       </Card>
     </div>
+
+    {/* Edit Client Dialog */}
+    <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+      <DialogContent className="sm:max-w-[500px]">
+        <form onSubmit={handleEditClient}>
+          <DialogHeader>
+            <DialogTitle>Edit Client</DialogTitle>
+            <DialogDescription>
+              Update the client details
+            </DialogDescription>
+          </DialogHeader>
+          {editingClient && (
+            <div className="grid gap-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit_business_name">Business Name *</Label>
+                <Input
+                  id="edit_business_name"
+                  value={editingClient.business_name}
+                  onChange={(e) =>
+                    setEditingClient({ ...editingClient, business_name: e.target.value })
+                  }
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_contact_person">Contact Person *</Label>
+                <Input
+                  id="edit_contact_person"
+                  value={editingClient.contact_person}
+                  onChange={(e) =>
+                    setEditingClient({ ...editingClient, contact_person: e.target.value })
+                  }
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_phone_number">Phone Number *</Label>
+                <Input
+                  id="edit_phone_number"
+                  type="tel"
+                  value={editingClient.phone_number}
+                  onChange={(e) =>
+                    setEditingClient({ ...editingClient, phone_number: e.target.value })
+                  }
+                  required
+                  placeholder="+917021307474 or 7021307474"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Format: +91XXXXXXXXXX (will be auto-formatted for WhatsApp)
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_email">Email</Label>
+                <Input
+                  id="edit_email"
+                  type="email"
+                  value={editingClient.email || ""}
+                  onChange={(e) =>
+                    setEditingClient({ ...editingClient, email: e.target.value })
+                  }
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit_gst_number">GST Number</Label>
+                  <Input
+                    id="edit_gst_number"
+                    value={editingClient.gst_number || ""}
+                    onChange={(e) =>
+                      setEditingClient({ ...editingClient, gst_number: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_pan_number">PAN Number</Label>
+                  <Input
+                    id="edit_pan_number"
+                    value={editingClient.pan_number || ""}
+                    onChange={(e) =>
+                      setEditingClient({ ...editingClient, pan_number: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit">Save Changes</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+
+    {/* Delete Client Confirmation Dialog */}
+    <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+      <DialogContent className="sm:max-w-[425px]">
+        <DialogHeader>
+          <DialogTitle>Delete Client</DialogTitle>
+          <DialogDescription>
+            Are you sure you want to delete this client? This action cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+        {deletingClient && (
+          <div className="py-4">
+            <p className="text-sm">
+              <strong>Business Name:</strong> {deletingClient.business_name}
+            </p>
+            <p className="text-sm">
+              <strong>Contact Person:</strong> {deletingClient.contact_person}
+            </p>
+            <p className="text-sm">
+              <strong>Phone:</strong> {deletingClient.phone_number}
+            </p>
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>
+            Cancel
+          </Button>
+          <Button variant="destructive" onClick={handleDeleteClient}>
+            Delete Client
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
     {kycClientId && (
       <KYCPanel clientId={kycClientId} open={kycOpen} onOpenChange={setKycOpen} />
     )}
