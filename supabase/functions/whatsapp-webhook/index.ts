@@ -609,14 +609,34 @@ async function processDocument(
 serve(async (req: Request): Promise<Response> => {
   const u = new URL(req.url);
   if (req.method === "GET") {
+    // WhatsApp webhook verification
     const mode = u.searchParams.get("hub.mode");
     const token = u.searchParams.get("hub.verify_token");
     const challenge = u.searchParams.get("hub.challenge");
+
+    console.log("[webhook-verify] mode:", mode, "token_present:", !!token, "challenge_present:", !!challenge);
+
     if (mode === "subscribe" && token && challenge) {
-      if (!VERIFY_TOKEN || token !== VERIFY_TOKEN) return bad({ error: "verify_token mismatch" }, 403);
-      return new Response(challenge, { status: 200 });
+      if (!VERIFY_TOKEN) {
+        console.error("[webhook-verify] VERIFY_TOKEN not configured");
+        return new Response("Server configuration error", { status: 500 });
+      }
+
+      if (token !== VERIFY_TOKEN) {
+        console.error("[webhook-verify] Token mismatch");
+        return new Response("Forbidden", { status: 403 });
+      }
+
+      console.log("[webhook-verify] ✅ Verification successful");
+      // CRITICAL: Must return challenge as plain text
+      return new Response(challenge, {
+        status: 200,
+        headers: { "Content-Type": "text/plain" }
+      });
     }
-    return bad({ error: "invalid verification" }, 400);
+
+    console.error("[webhook-verify] Invalid verification request");
+    return new Response("Bad Request", { status: 400 });
   }
 
   if (req.method !== "POST") return bad({ error: "method not allowed" }, 405);
