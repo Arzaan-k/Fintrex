@@ -668,16 +668,28 @@ serve(async (req: Request): Promise<Response> => {
           const businessPhone = value?.metadata?.display_phone_number;
           let accountantId: string | undefined;
 
+          console.log(`📱 Business WhatsApp number: ${businessPhone}`);
+
           if (businessPhone) {
-            const { data: accountant } = await supabase
+            const { data: accountant, error: accountantError } = await supabase
               .from("profiles")
-              .select("id, settings, firm_name, full_name")
+              .select("id, settings, firm_name, full_name, whatsapp_number")
               .eq("whatsapp_number", businessPhone)
               .single();
 
+            if (accountantError) {
+              console.error(`❌ Error finding accountant:`, accountantError);
+              console.log(`📊 Searched for whatsapp_number: ${businessPhone}`);
+            }
+
             if (accountant) {
               accountantId = accountant.id;
+              console.log(`✅ Found accountant: ${accountant.full_name || accountant.firm_name} (${accountantId})`);
+            } else {
+              console.log(`⚠️ No accountant found with whatsapp_number: ${businessPhone}`);
             }
+          } else {
+            console.log(`⚠️ No business phone number in webhook metadata`);
           }
 
           // Smart client matching - match by phone number or email
@@ -693,19 +705,38 @@ serve(async (req: Request): Promise<Response> => {
             from.replace(/^\+?91/, '0'),             // With 0 prefix: 09876543210
           ];
 
+          console.log(`📞 Incoming phone: ${from}, Variants: ${JSON.stringify(phoneVariants)}`);
+
           if (accountantId) {
-            // Try to find existing client by phone number
-            const { data: clients } = await supabase
+            // Try to find existing client by phone number with multiple variant matching
+            // Build OR conditions for each phone variant
+            const orConditions = phoneVariants
+              .map(variant => `phone_number.eq.${variant}`)
+              .join(',');
+
+            console.log(`🔍 Searching for client with accountant_id: ${accountantId}, phone variants: ${phoneVariants.join(', ')}`);
+
+            const { data: clients, error: clientError } = await supabase
               .from("clients")
-              .select("id, phone_number, email, client_name, status")
+              .select("id, phone_number, email, business_name, contact_person, status")
               .eq("accountant_id", accountantId)
-              .or(`phone_number.in.(${phoneVariants.join(',')}),phone.in.(${phoneVariants.join(',')})`)
+              .or(orConditions)
               .limit(1);
+
+            if (clientError) {
+              console.error(`❌ Error querying clients:`, clientError);
+            }
+
+            console.log(`🔎 Client search result: ${clients?.length || 0} matches found`);
+            if (clients && clients.length > 0) {
+              console.log(`📋 Matched client data:`, JSON.stringify(clients[0]));
+            }
 
             if (clients && clients.length > 0) {
               // Found existing client - use this account
               clientId = clients[0].id;
-              clientName = clients[0].client_name;
+              // Use business_name as primary, fallback to contact_person
+              clientName = clients[0].business_name || clients[0].contact_person;
               isExistingClient = true;
 
               console.log(`✅ Matched to existing client: ${clientName} (${clientId})`);
@@ -720,7 +751,8 @@ serve(async (req: Request): Promise<Response> => {
             } else {
               // No existing client found - do NOT auto-create
               // Instead, notify the accountant that an unknown number is trying to send documents
-              console.log(`⚠️ Unknown phone number ${from} - no client account found`);
+              console.log(`⚠️ Unknown phone number ${from} - no client account found for accountant ${accountantId}`);
+              console.log(`📊 Searched variants: ${phoneVariants.join(', ')}`);
 
               await sendWhatsAppMessage(phoneNumberId, from, {
                 type: "text",
