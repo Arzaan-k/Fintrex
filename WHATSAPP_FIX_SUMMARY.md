@@ -1,5 +1,20 @@
 # WhatsApp Client Identification Fix Summary
 
+## ⚠️ IMPORTANT: Database Setup Required First!
+
+**Before testing, you MUST run the database migration:**
+
+```sql
+-- Open Supabase SQL Editor and run:
+-- File: fix-missing-columns.sql
+```
+
+This adds the required `whatsapp_number`, `firm_name`, `settings`, and `whatsapp_api_key` columns to your profiles table.
+
+**Skip to: [Step 0: Add Missing Columns](#step-0-add-missing-database-columns-important)**
+
+---
+
 ## Issues Fixed
 
 ### 1. **Database Query Error** ❌ → ✅
@@ -79,6 +94,26 @@ The system creates 4 variants of the incoming phone number to handle different f
 **Important:** When adding clients, phone numbers are automatically normalized to `+91XXXXXXXXXX` format.
 
 ## Testing the Fix
+
+### Step 0: Add Missing Database Columns (IMPORTANT!)
+
+**If you get an error "column whatsapp_number does not exist", run this first:**
+
+1. Open your Supabase SQL Editor
+2. Copy and paste the contents of `fix-missing-columns.sql`
+3. Click "Run" to execute
+
+This adds the required columns:
+- `whatsapp_number` - Your WhatsApp Business number
+- `whatsapp_api_key` - WhatsApp API token
+- `firm_name` - Your firm name
+- `settings` - User preferences (JSONB)
+
+**Verification:** After running, you should see:
+```
+✅ 4 rows showing the new columns
+✅ Your profile data with new fields
+```
 
 ### Step 1: Verify Database Setup
 
