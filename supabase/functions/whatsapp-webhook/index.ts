@@ -665,37 +665,7 @@ serve(async (req: Request): Promise<Response> => {
           const from = normalizePhone(msg.from as string);
           const type = msg.type as string;
 
-          const businessPhone = value?.metadata?.display_phone_number;
-          let accountantId: string | undefined;
-
-          console.log(`📱 Business WhatsApp number: ${businessPhone}`);
-
-          if (businessPhone) {
-            const { data: accountant, error: accountantError } = await supabase
-              .from("profiles")
-              .select("id, settings, firm_name, full_name, whatsapp_number")
-              .eq("whatsapp_number", businessPhone)
-              .single();
-
-            if (accountantError) {
-              console.error(`❌ Error finding accountant:`, accountantError);
-              console.log(`📊 Searched for whatsapp_number: ${businessPhone}`);
-            }
-
-            if (accountant) {
-              accountantId = accountant.id;
-              console.log(`✅ Found accountant: ${accountant.full_name || accountant.firm_name} (${accountantId})`);
-            } else {
-              console.log(`⚠️ No accountant found with whatsapp_number: ${businessPhone}`);
-            }
-          } else {
-            console.log(`⚠️ No business phone number in webhook metadata`);
-          }
-
-          // Smart client matching - match by phone number or email
-          let clientId: string | undefined;
-          let clientName: string | undefined;
-          let isExistingClient = false;
+          console.log(`📞 Incoming WhatsApp message from: ${from}`);
 
           // Create phone variants for flexible matching
           const phoneVariants = [
@@ -705,74 +675,68 @@ serve(async (req: Request): Promise<Response> => {
             from.replace(/^\+?91/, '0'),             // With 0 prefix: 09876543210
           ];
 
-          console.log(`📞 Incoming phone: ${from}, Variants: ${JSON.stringify(phoneVariants)}`);
+          console.log(`🔍 Searching for client with phone variants: ${JSON.stringify(phoneVariants)}`);
 
-          if (accountantId) {
-            // Try to find existing client by phone number with multiple variant matching
-            // Build OR conditions for each phone variant
-            const orConditions = phoneVariants
-              .map(variant => `phone_number.eq.${variant}`)
-              .join(',');
+          // Find client by phone number (across ALL accountants)
+          // Build OR conditions for each phone variant
+          const orConditions = phoneVariants
+            .map(variant => `phone_number.eq.${variant}`)
+            .join(',');
 
-            console.log(`🔍 Searching for client with accountant_id: ${accountantId}, phone variants: ${phoneVariants.join(', ')}`);
+          const { data: clients, error: clientError } = await supabase
+            .from("clients")
+            .select("id, phone_number, email, business_name, contact_person, status, accountant_id")
+            .or(orConditions)
+            .limit(1);
 
-            const { data: clients, error: clientError } = await supabase
-              .from("clients")
-              .select("id, phone_number, email, business_name, contact_person, status")
-              .eq("accountant_id", accountantId)
-              .or(orConditions)
-              .limit(1);
+          if (clientError) {
+            console.error(`❌ Error querying clients:`, clientError);
+            continue;
+          }
 
-            if (clientError) {
-              console.error(`❌ Error querying clients:`, clientError);
-            }
+          console.log(`🔎 Client search result: ${clients?.length || 0} matches found`);
 
-            console.log(`🔎 Client search result: ${clients?.length || 0} matches found`);
-            if (clients && clients.length > 0) {
-              console.log(`📋 Matched client data:`, JSON.stringify(clients[0]));
-            }
+          let clientId: string | undefined;
+          let clientName: string | undefined;
+          let accountantId: string | undefined;
 
-            if (clients && clients.length > 0) {
-              // Found existing client - use this account
-              clientId = clients[0].id;
-              // Use business_name as primary, fallback to contact_person
-              clientName = clients[0].business_name || clients[0].contact_person;
-              isExistingClient = true;
+          if (clients && clients.length > 0) {
+            // Found existing client - use this account
+            const client = clients[0];
+            clientId = client.id;
+            clientName = client.business_name || client.contact_person;
+            accountantId = client.accountant_id;
 
-              console.log(`✅ Matched to existing client: ${clientName} (${clientId})`);
+            console.log(`✅ Matched to existing client: ${clientName} (${clientId})`);
+            console.log(`📋 Client data:`, JSON.stringify(client));
 
-              // Send personalized welcome for existing clients
-              await sendWhatsAppMessage(phoneNumberId, from, {
-                type: "text",
-                text: {
-                  body: `Welcome back, ${clientName}! 👋\n\nYour documents will be automatically linked to your account.\n\nSend me an invoice to get started! 📄`
-                }
-              });
-            } else {
-              // No existing client found - do NOT auto-create
-              // Instead, notify the accountant that an unknown number is trying to send documents
-              console.log(`⚠️ Unknown phone number ${from} - no client account found for accountant ${accountantId}`);
-              console.log(`📊 Searched variants: ${phoneVariants.join(', ')}`);
+            // Send personalized welcome for existing clients
+            await sendWhatsAppMessage(phoneNumberId, from, {
+              type: "text",
+              text: {
+                body: `Welcome back, ${clientName}! 👋\n\nYour documents will be automatically linked to your account.\n\nSend me an invoice to get started! 📄`
+              }
+            });
+          } else {
+            // No existing client found
+            console.log(`⚠️ Unknown phone number ${from} - no client account found`);
+            console.log(`📊 Searched variants: ${phoneVariants.join(', ')}`);
 
-              await sendWhatsAppMessage(phoneNumberId, from, {
-                type: "text",
-                text: {
-                  body: `⚠️ *Account Not Found*\n\nYour phone number is not registered in our system.\n\nPlease ask your accountant to add you as a client first, or provide your registered phone number/email.\n\nFor support, contact your accountant.`
-                }
-              });
+            await sendWhatsAppMessage(phoneNumberId, from, {
+              type: "text",
+              text: {
+                body: `⚠️ *Account Not Found*\n\nYour phone number (${from}) is not registered in our system.\n\nPlease ask your accountant to add you as a client first.\n\nFor support, contact your accountant.`
+              }
+            });
 
-              // Notify accountant about unregistered attempt (optional - can be implemented later)
-              // This could create a notification or log entry for the accountant to review
-
-              // Skip further processing - no client ID available
-              continue; // Skip to next message
-            }
+            // Skip further processing - no client ID available
+            continue;
           }
 
           // Only process messages if we have a valid client ID
           if (!clientId) {
             console.log(`⚠️ No client ID - skipping message processing for ${from}`);
-            continue; // Skip to next message
+            continue;
           }
 
           // Handle message types
