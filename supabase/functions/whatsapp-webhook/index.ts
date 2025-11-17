@@ -673,28 +673,27 @@ serve(async (req: Request): Promise<Response> => {
             from.replace(/^\+/, ''),                 // Without +: 919876543210
             from.replace(/^\+?91/, ''),              // Without country code: 9876543210
             from.replace(/^\+?91/, '0'),             // With 0 prefix: 09876543210
-          ];
+          ].filter((v, i, arr) => arr.indexOf(v) === i); // Remove duplicates
 
           console.log(`🔍 Searching for client with phone variants: ${JSON.stringify(phoneVariants)}`);
 
-          // Find client by phone number (across ALL accountants)
-          // Build OR conditions for each phone variant
-          const orConditions = phoneVariants
-            .map(variant => `phone_number.eq.${variant}`)
-            .join(',');
-
+          // Find client by phone number using .in() for better matching
           const { data: clients, error: clientError } = await supabase
             .from("clients")
             .select("id, phone_number, email, business_name, contact_person, status, accountant_id")
-            .or(orConditions)
+            .in("phone_number", phoneVariants)
             .limit(1);
 
           if (clientError) {
             console.error(`❌ Error querying clients:`, clientError);
+            console.error(`❌ Error details:`, JSON.stringify(clientError));
             continue;
           }
 
           console.log(`🔎 Client search result: ${clients?.length || 0} matches found`);
+          if (clients && clients.length > 0) {
+            console.log(`📋 Found client data:`, JSON.stringify(clients[0]));
+          }
 
           let clientId: string | undefined;
           let clientName: string | undefined;
@@ -704,11 +703,10 @@ serve(async (req: Request): Promise<Response> => {
             // Found existing client - use this account
             const client = clients[0];
             clientId = client.id;
-            clientName = client.business_name || client.contact_person;
+            clientName = client.business_name || client.contact_person || 'there';
             accountantId = client.accountant_id;
 
-            console.log(`✅ Matched to existing client: ${clientName} (${clientId})`);
-            console.log(`📋 Client data:`, JSON.stringify(client));
+            console.log(`✅ Matched to existing client: ${clientName} (ID: ${clientId})`);
 
             // Send personalized welcome for existing clients
             await sendWhatsAppMessage(phoneNumberId, from, {
@@ -733,9 +731,10 @@ serve(async (req: Request): Promise<Response> => {
             continue;
           }
 
-          // Only process messages if we have a valid client ID
+          // At this point, clientId is guaranteed to be set
+          // Add type assertion for safety
           if (!clientId) {
-            console.log(`⚠️ No client ID - skipping message processing for ${from}`);
+            console.error(`❌ CRITICAL: Client was found but ID is missing! From: ${from}`);
             continue;
           }
 
