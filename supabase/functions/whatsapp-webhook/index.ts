@@ -665,25 +665,7 @@ serve(async (req: Request): Promise<Response> => {
           const from = normalizePhone(msg.from as string);
           const type = msg.type as string;
 
-          const businessPhone = value?.metadata?.display_phone_number;
-          let accountantId: string | undefined;
-
-          if (businessPhone) {
-            const { data: accountant } = await supabase
-              .from("profiles")
-              .select("id, settings, firm_name, full_name")
-              .eq("whatsapp_number", businessPhone)
-              .single();
-
-            if (accountant) {
-              accountantId = accountant.id;
-            }
-          }
-
-          // Smart client matching - match by phone number or email
-          let clientId: string | undefined;
-          let clientName: string | undefined;
-          let isExistingClient = false;
+          console.log(`📞 Incoming WhatsApp message from: ${from}`);
 
           // Create phone variants for flexible matching
           const phoneVariants = [
@@ -693,54 +675,68 @@ serve(async (req: Request): Promise<Response> => {
             from.replace(/^\+?91/, '0'),             // With 0 prefix: 09876543210
           ];
 
-          if (accountantId) {
-            // Try to find existing client by phone number
-            const { data: clients } = await supabase
-              .from("clients")
-              .select("id, phone_number, email, client_name, status")
-              .eq("accountant_id", accountantId)
-              .or(`phone_number.in.(${phoneVariants.join(',')}),phone.in.(${phoneVariants.join(',')})`)
-              .limit(1);
+          console.log(`🔍 Searching for client with phone variants: ${JSON.stringify(phoneVariants)}`);
 
-            if (clients && clients.length > 0) {
-              // Found existing client - use this account
-              clientId = clients[0].id;
-              clientName = clients[0].client_name;
-              isExistingClient = true;
+          // Find client by phone number (across ALL accountants)
+          // Build OR conditions for each phone variant
+          const orConditions = phoneVariants
+            .map(variant => `phone_number.eq.${variant}`)
+            .join(',');
 
-              console.log(`✅ Matched to existing client: ${clientName} (${clientId})`);
+          const { data: clients, error: clientError } = await supabase
+            .from("clients")
+            .select("id, phone_number, email, business_name, contact_person, status, accountant_id")
+            .or(orConditions)
+            .limit(1);
 
-              // Send personalized welcome for existing clients
-              await sendWhatsAppMessage(phoneNumberId, from, {
-                type: "text",
-                text: {
-                  body: `Welcome back, ${clientName}! 👋\n\nYour documents will be automatically linked to your account.\n\nSend me an invoice to get started! 📄`
-                }
-              });
-            } else {
-              // No existing client found - do NOT auto-create
-              // Instead, notify the accountant that an unknown number is trying to send documents
-              console.log(`⚠️ Unknown phone number ${from} - no client account found`);
+          if (clientError) {
+            console.error(`❌ Error querying clients:`, clientError);
+            continue;
+          }
 
-              await sendWhatsAppMessage(phoneNumberId, from, {
-                type: "text",
-                text: {
-                  body: `⚠️ *Account Not Found*\n\nYour phone number is not registered in our system.\n\nPlease ask your accountant to add you as a client first, or provide your registered phone number/email.\n\nFor support, contact your accountant.`
-                }
-              });
+          console.log(`🔎 Client search result: ${clients?.length || 0} matches found`);
 
-              // Notify accountant about unregistered attempt (optional - can be implemented later)
-              // This could create a notification or log entry for the accountant to review
+          let clientId: string | undefined;
+          let clientName: string | undefined;
+          let accountantId: string | undefined;
 
-              // Skip further processing - no client ID available
-              continue; // Skip to next message
-            }
+          if (clients && clients.length > 0) {
+            // Found existing client - use this account
+            const client = clients[0];
+            clientId = client.id;
+            clientName = client.business_name || client.contact_person;
+            accountantId = client.accountant_id;
+
+            console.log(`✅ Matched to existing client: ${clientName} (${clientId})`);
+            console.log(`📋 Client data:`, JSON.stringify(client));
+
+            // Send personalized welcome for existing clients
+            await sendWhatsAppMessage(phoneNumberId, from, {
+              type: "text",
+              text: {
+                body: `Welcome back, ${clientName}! 👋\n\nYour documents will be automatically linked to your account.\n\nSend me an invoice to get started! 📄`
+              }
+            });
+          } else {
+            // No existing client found
+            console.log(`⚠️ Unknown phone number ${from} - no client account found`);
+            console.log(`📊 Searched variants: ${phoneVariants.join(', ')}`);
+
+            await sendWhatsAppMessage(phoneNumberId, from, {
+              type: "text",
+              text: {
+                body: `⚠️ *Account Not Found*\n\nYour phone number (${from}) is not registered in our system.\n\nPlease ask your accountant to add you as a client first.\n\nFor support, contact your accountant.`
+              }
+            });
+
+            // Skip further processing - no client ID available
+            continue;
           }
 
           // Only process messages if we have a valid client ID
           if (!clientId) {
             console.log(`⚠️ No client ID - skipping message processing for ${from}`);
-            continue; // Skip to next message
+            continue;
           }
 
           // Handle message types
