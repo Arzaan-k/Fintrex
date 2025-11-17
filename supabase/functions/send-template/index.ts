@@ -5,25 +5,38 @@
 
 // deno-lint-ignore-file no-explicit-any
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-
-const JSON_HEADERS = {
-  "content-type": "application/json",
-  "access-control-allow-origin": "*",
-};
+import {
+  getCorsHeaders,
+  handleCors,
+  verifyAuth,
+  errorResponse,
+  successResponse,
+  checkRateLimit,
+  getClientIdentifier
+} from "../_shared/security.ts";
 
 serve(async (req: Request): Promise<Response> => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, {
-      headers: {
-        ...JSON_HEADERS,
-        "access-control-allow-methods": "POST, OPTIONS",
-        "access-control-allow-headers": "content-type, authorization",
-      },
-    });
-  }
+  const origin = req.headers.get("origin");
+  const corsHeaders = getCorsHeaders(origin);
+
+  // Handle CORS preflight
+  const corsResponse = handleCors(req);
+  if (corsResponse) return corsResponse;
 
   if (req.method !== "POST") {
-    return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: JSON_HEADERS });
+    return errorResponse("Method not allowed", 405, corsHeaders);
+  }
+
+  // Verify authentication
+  const userId = await verifyAuth(req);
+  if (!userId) {
+    return errorResponse("Unauthorized - valid authentication required", 401, corsHeaders);
+  }
+
+  // Rate limiting
+  const clientId = getClientIdentifier(req, userId);
+  if (!checkRateLimit(clientId, 50, 60000)) { // 50 requests per minute
+    return errorResponse("Rate limit exceeded - please try again later", 429, corsHeaders);
   }
 
   try {
@@ -34,10 +47,7 @@ serve(async (req: Request): Promise<Response> => {
     };
 
     if (!to || !template) {
-      return new Response(JSON.stringify({ success: false, error: "Missing 'to' or 'template'" }), {
-        status: 400,
-        headers: JSON_HEADERS,
-      });
+      return errorResponse("Missing 'to' or 'template'", 400, corsHeaders);
     }
 
     const token = Deno.env.get("WHATSAPP_TOKEN");
@@ -45,9 +55,9 @@ serve(async (req: Request): Promise<Response> => {
 
     if (!token || !phoneNumberId) {
       // Mock mode
-      return new Response(
-        JSON.stringify({ success: true, messageId: `mock_${Date.now()}` }),
-        { status: 200, headers: JSON_HEADERS }
+      return successResponse(
+        { success: true, messageId: `mock_${Date.now()}` },
+        corsHeaders
       );
     }
 
@@ -84,15 +94,17 @@ serve(async (req: Request): Promise<Response> => {
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      return new Response(JSON.stringify({ success: false, error: data?.error?.message || `HTTP ${res.status}` }), {
-        status: 200,
-        headers: JSON_HEADERS,
-      });
+      console.error('WhatsApp API error:', data);
+      return successResponse(
+        { success: false, error: 'Failed to send message - please try again' },
+        corsHeaders
+      );
     }
 
     const messageId = data?.messages?.[0]?.id || data?.id || `wa_${Date.now()}`;
-    return new Response(JSON.stringify({ success: true, messageId }), { status: 200, headers: JSON_HEADERS });
+    return successResponse({ success: true, messageId }, corsHeaders);
   } catch (e) {
-    return new Response(JSON.stringify({ success: false, error: String(e) }), { status: 200, headers: JSON_HEADERS });
+    console.error('Template send error:', e);
+    return errorResponse('Failed to send template message', 500, corsHeaders);
   }
 });

@@ -7,12 +7,15 @@ IN validation against government database
 // Response: { valid: boolean, details: {...} }
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+import {
+  getCorsHeaders,
+  handleCors,
+  verifyAuth,
+  errorResponse,
+  successResponse,
+  checkRateLimit,
+  getClientIdentifier
+} from "../_shared/security.ts";
 
 interface GSTValidationResult {
   valid: boolean;
@@ -163,7 +166,8 @@ async function validateViaAPI(gstin: string): Promise<GSTValidationResult> {
         break;
 
       case 'mastersindia':
-        apiUrl = `https://api.mastersindia.co/gstinDetails?gstin=${gstin}`;
+        // Use URL encoding to prevent injection
+        apiUrl = `https://api.mastersindia.co/gstinDetails?gstin=${encodeURIComponent(gstin)}`;
         headers = {
           'x-api-key': apiKey,
           'Content-Type': 'application/json'
@@ -172,7 +176,8 @@ async function validateViaAPI(gstin: string): Promise<GSTValidationResult> {
 
       case 'gstn':
         // Official GSTN API (requires more complex auth)
-        apiUrl = `https://api.gstsystem.in/taxpayerapi/v1.0/publicapi/search?gstin=${gstin}`;
+        // Use URL encoding to prevent injection
+        apiUrl = `https://api.gstsystem.in/taxpayerapi/v1.0/publicapi/search?gstin=${encodeURIComponent(gstin)}`;
         headers = {
           'apikey': apiKey,
           'username': Deno.env.get("GST_USERNAME") || '',
@@ -267,26 +272,34 @@ async function validateViaAPI(gstin: string): Promise<GSTValidationResult> {
  * Main handler
  */
 serve(async (req: Request): Promise<Response> => {
+  const origin = req.headers.get("origin");
+  const corsHeaders = getCorsHeaders(origin);
+
   // Handle CORS preflight
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: CORS_HEADERS });
-  }
+  const corsResponse = handleCors(req);
+  if (corsResponse) return corsResponse;
 
   if (req.method !== "POST") {
-    return new Response(
-      JSON.stringify({ error: "Method not allowed" }),
-      { status: 405, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
-    );
+    return errorResponse("Method not allowed", 405, corsHeaders);
+  }
+
+  // Verify authentication
+  const userId = await verifyAuth(req);
+  if (!userId) {
+    return errorResponse("Unauthorized - valid authentication required", 401, corsHeaders);
+  }
+
+  // Rate limiting
+  const clientId = getClientIdentifier(req, userId);
+  if (!checkRateLimit(clientId, 100, 60000)) { // 100 requests per minute
+    return errorResponse("Rate limit exceeded - please try again later", 429, corsHeaders);
   }
 
   try {
     const body = await req.json() as { gstin: string };
 
     if (!body.gstin) {
-      return new Response(
-        JSON.stringify({ error: "gstin is required" }),
-        { status: 400, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
-      );
+      return errorResponse("gstin is required", 400, corsHeaders);
     }
 
     const gstin = body.gstin.replace(/\s/g, '').toUpperCase();
@@ -296,16 +309,13 @@ serve(async (req: Request): Promise<Response> => {
     // Step 1: Format validation
     const format_valid = isValidGSTINFormat(gstin);
     if (!format_valid) {
-      return new Response(
-        JSON.stringify({
-          valid: false,
-          format_valid: false,
-          checksum_valid: false,
-          error: 'Invalid GSTIN format (must be 15 characters: 2 digits, 5 letters, 4 digits, 1 letter, 1 alphanumeric, Z, 1 alphanumeric)',
-          source: 'checksum'
-        }),
-        { status: 200, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
-      );
+      return successResponse({
+        valid: false,
+        format_valid: false,
+        checksum_valid: false,
+        error: 'Invalid GSTIN format (must be 15 characters: 2 digits, 5 letters, 4 digits, 1 letter, 1 alphanumeric, Z, 1 alphanumeric)',
+        source: 'checksum'
+      }, corsHeaders);
     }
 
     // Step 2: Checksum validation
@@ -335,22 +345,15 @@ serve(async (req: Request): Promise<Response> => {
 
     console.log(`📊 Validation result: ${result.valid ? '✅ Valid' : '❌ Invalid'} (${result.source})`);
 
-    return new Response(
-      JSON.stringify(result),
-      { status: 200, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
-    );
+    return successResponse(result, corsHeaders);
 
   } catch (error) {
     console.error('❌ Validation error:', error);
-    return new Response(
-      JSON.stringify({
-        valid: false,
-        format_valid: false,
-        checksum_valid: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        source: 'checksum'
-      }),
-      { status: 500, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
+    // Don't expose internal error details
+    return errorResponse(
+      'Validation failed - please check the GSTIN format and try again',
+      500,
+      corsHeaders
     );
   }
 });

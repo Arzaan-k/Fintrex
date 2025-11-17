@@ -5,12 +5,15 @@
 // Body: { fileUrl: string, fileName: string, provider?: 'auto' | 'tesseract' | 'deepseek' | 'vision' }
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+import {
+  getCorsHeaders,
+  handleCors,
+  verifyAuth,
+  errorResponse,
+  successResponse,
+  checkRateLimit,
+  getClientIdentifier
+} from "../_shared/security.ts";
 
 interface OCRRequest {
   fileUrl: string;
@@ -46,12 +49,15 @@ async function processWithGoogleVision(fileUrl: string): Promise<OCRResult> {
   const imageBuffer = await imageResponse.arrayBuffer();
   const base64Image = btoa(String.fromCharCode(...new Uint8Array(imageBuffer)));
 
-  // Call Google Vision API
+  // Call Google Vision API with API key in header (secure)
   const response = await fetch(
-    `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`,
+    'https://vision.googleapis.com/v1/images:annotate',
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey
+      },
       body: JSON.stringify({
         requests: [{
           image: { content: base64Image },
@@ -180,12 +186,15 @@ async function processWithGemini(fileUrl: string): Promise<OCRResult> {
   // Determine MIME type
   const mimeType = fileUrl.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
 
-  // Call Gemini API
+  // Call Gemini API with API key in header (secure)
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey
+      },
       body: JSON.stringify({
         contents: [{
           parts: [
@@ -304,26 +313,34 @@ async function processAuto(fileUrl: string): Promise<OCRResult> {
  * Main handler
  */
 serve(async (req: Request): Promise<Response> => {
+  const origin = req.headers.get("origin");
+  const corsHeaders = getCorsHeaders(origin);
+
   // Handle CORS preflight
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: CORS_HEADERS });
-  }
+  const corsResponse = handleCors(req);
+  if (corsResponse) return corsResponse;
 
   if (req.method !== "POST") {
-    return new Response(
-      JSON.stringify({ error: "Method not allowed" }),
-      { status: 405, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
-    );
+    return errorResponse("Method not allowed", 405, corsHeaders);
+  }
+
+  // Verify authentication
+  const userId = await verifyAuth(req);
+  if (!userId) {
+    return errorResponse("Unauthorized - valid authentication required", 401, corsHeaders);
+  }
+
+  // Rate limiting
+  const clientId = getClientIdentifier(req, userId);
+  if (!checkRateLimit(clientId, 50, 60000)) { // 50 requests per minute
+    return errorResponse("Rate limit exceeded - please try again later", 429, corsHeaders);
   }
 
   try {
     const body = await req.json() as OCRRequest;
 
     if (!body.fileUrl) {
-      return new Response(
-        JSON.stringify({ error: "fileUrl is required" }),
-        { status: 400, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
-      );
+      return errorResponse("fileUrl is required", 400, corsHeaders);
     }
 
     const provider = body.provider || 'auto';
@@ -348,23 +365,18 @@ serve(async (req: Request): Promise<Response> => {
         break;
     }
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        ...result
-      }),
-      { status: 200, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
-    );
+    return successResponse({
+      success: true,
+      ...result
+    }, corsHeaders);
 
   } catch (error) {
     console.error('OCR processing error:', error);
-    return new Response(
-      JSON.stringify({
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        provider: 'none'
-      }),
-      { status: 500, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
+    // Don't expose internal error details to client
+    return errorResponse(
+      'OCR processing failed - please try again or contact support',
+      500,
+      corsHeaders
     );
   }
 });

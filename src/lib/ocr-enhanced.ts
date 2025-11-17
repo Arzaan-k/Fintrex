@@ -164,16 +164,26 @@ export async function classifyDocument(text: string): Promise<DocumentClassifica
 
     const data = await response.json();
     const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-    
-    // Extract JSON from response
-    const jsonMatch = responseText.match(/\{[^}]+\}/);
+
+    // Extract and safely parse JSON from response
+    const jsonMatch = responseText.match(/\{(?:[^{}]|\{[^{}]*\})*\}/);
     if (jsonMatch) {
-      const result = JSON.parse(jsonMatch[0]);
-      return {
-        type: result.type || 'other',
-        confidence: result.confidence || 0.75,
-        subType: result.subType
-      };
+      try {
+        const result = JSON.parse(jsonMatch[0]);
+
+        // Validate result structure
+        if (typeof result !== 'object' || result === null) {
+          throw new Error('Invalid result structure');
+        }
+
+        return {
+          type: typeof result.type === 'string' ? result.type : 'other',
+          confidence: typeof result.confidence === 'number' ? result.confidence : 0.75,
+          subType: typeof result.subType === 'string' ? result.subType : undefined
+        };
+      } catch (parseError) {
+        console.error('Failed to parse classification result:', parseError);
+      }
     }
   } catch (error) {
     console.error('Gemini classification failed:', error);
@@ -244,17 +254,27 @@ export async function extractStructuredData(text: string, documentType: string):
 
     const data = await response.json();
     const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-    
-    // Extract JSON from response
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+
+    // Extract and safely parse JSON from response
+    const jsonMatch = responseText.match(/\{(?:[^{}]|\{[^{}]*\})*\}/);
     if (jsonMatch) {
-      const fields = JSON.parse(jsonMatch[0]);
-      return {
-        classification,
-        fields,
-        rawText: text,
-        confidence: 0.90
-      };
+      try {
+        const fields = JSON.parse(jsonMatch[0]);
+
+        // Validate fields is an object
+        if (typeof fields !== 'object' || fields === null) {
+          throw new Error('Invalid fields structure');
+        }
+
+        return {
+          classification,
+          fields,
+          rawText: text,
+          confidence: 0.90
+        };
+      } catch (parseError) {
+        console.error('Failed to parse extraction result:', parseError);
+      }
     }
   } catch (error) {
     console.error('Gemini extraction failed:', error);

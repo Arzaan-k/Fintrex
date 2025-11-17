@@ -4,18 +4,19 @@
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { SECURITY_HEADERS, verifyWebhookToken, checkRateLimit, getClientIdentifier } from "../_shared/security.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
-const JSON_HEADERS = { "content-type": "application/json" } as const;
+const JSON_HEADERS = { "content-type": "application/json", ...SECURITY_HEADERS } as const;
 
-function ok(body: any = { status: "ok" }) { 
-  return new Response(JSON.stringify(body), { status: 200, headers: JSON_HEADERS }); 
+function ok(body: any = { status: "ok" }) {
+  return new Response(JSON.stringify(body), { status: 200, headers: JSON_HEADERS });
 }
 
-function bad(body: any, status = 400) { 
-  return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS }); 
+function bad(body: any, status = 400) {
+  return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
 }
 
 interface EmailMessage {
@@ -37,15 +38,24 @@ serve(async (req: Request): Promise<Response> => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-      },
+      headers: JSON_HEADERS,
     });
   }
 
   if (req.method !== "POST") {
     return bad({ error: "method not allowed" }, 405);
+  }
+
+  // Verify webhook token
+  if (!verifyWebhookToken(req, 'EMAIL_WEBHOOK_SECRET')) {
+    console.warn('Unauthorized webhook attempt');
+    return bad({ error: "unauthorized" }, 401);
+  }
+
+  // Rate limiting by IP
+  const clientId = getClientIdentifier(req);
+  if (!checkRateLimit(clientId, 100, 60000)) {
+    return bad({ error: "rate limit exceeded" }, 429);
   }
 
   try {
@@ -73,12 +83,11 @@ serve(async (req: Request): Promise<Response> => {
       // Mailgun format
       emailMessage = parseMailgunWebhook(payload);
     } else {
-      console.log("Unknown email webhook format:", JSON.stringify(payload).slice(0, 500));
-      return ok({ message: "Unknown format, logged for inspection" });
+      console.log("Unknown email webhook format - payload structure not recognized");
+      return ok({ message: "Webhook received" });
     }
 
-    console.log(`📧 Email received from ${emailMessage.from} to ${emailMessage.to}`);
-    console.log(`📎 Attachments: ${emailMessage.attachments.length}`);
+    console.log(`📧 Email received with ${emailMessage.attachments.length} attachments`);
 
     // Extract accountant email domain from "to" address
     // Expected format: {firmslug-userid}@fintrex.email or custom domain

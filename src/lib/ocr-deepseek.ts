@@ -381,21 +381,44 @@ Rules:
 }
 
 /**
+ * Safely parse JSON with validation
+ */
+function safeJSONParse(text: string): any {
+  try {
+    const parsed = JSON.parse(text);
+
+    // Validate it's actually an object and not null
+    if (typeof parsed !== 'object' || parsed === null) {
+      throw new Error('Invalid JSON structure');
+    }
+
+    return parsed;
+  } catch (error) {
+    throw new Error(`JSON parse error: ${error instanceof Error ? error.message : 'unknown'}`);
+  }
+}
+
+/**
  * Parse JSON response from DeepSeek
  */
 function parseDeepSeekJSONResponse(responseText: string): any {
   try {
-    // Find JSON in the response
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+    // Try to parse the entire response as JSON first
+    try {
+      return safeJSONParse(responseText);
+    } catch {
+      // If that fails, try to find JSON in the response
+      // Use a more restrictive regex to avoid partial matches
+      const jsonMatch = responseText.match(/\{(?:[^{}]|\{[^{}]*\})*\}/);
+      if (jsonMatch) {
+        return safeJSONParse(jsonMatch[0]);
+      }
     }
 
-    // Try to parse the entire response as JSON
-    return JSON.parse(responseText);
+    throw new Error('No valid JSON found in response');
   } catch (error) {
     console.error('Failed to parse DeepSeek JSON response:', error);
-    console.log('Raw response:', responseText);
+    // Don't log raw response as it may contain sensitive data
     return null;
   }
 }

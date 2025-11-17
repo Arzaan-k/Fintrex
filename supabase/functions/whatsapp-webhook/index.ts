@@ -596,10 +596,12 @@ async function processDocument(
 
   } catch (error) {
     console.error('Document processing error:', error);
+    // Don't expose internal error details to user
+    console.error('Document processing error:', error);
     await sendWhatsAppMessage(phoneNumberId, from, {
       type: "text",
       text: {
-        body: `❌ *Processing Failed*\n\nSorry, I couldn't process your document.\n\nError: ${error.message}\n\nPlease try again or contact support.`,
+        body: `❌ *Processing Failed*\n\nSorry, I couldn't process your document.\n\nPlease try again or contact support if the issue persists.`,
       },
     });
     sessions.delete(from);
@@ -675,7 +677,7 @@ serve(async (req: Request): Promise<Response> => {
             from.replace(/^\+?91/, '0'),             // With 0 prefix: 09876543210
           ];
 
-          console.log(`🔍 Searching for client with phone variants: ${JSON.stringify(phoneVariants)}`);
+          console.log(`🔍 Searching for client with phone (count variants: ${phoneVariants.length})`);
 
           // Find client by phone number (across ALL accountants)
           // Build OR conditions for each phone variant
@@ -707,8 +709,7 @@ serve(async (req: Request): Promise<Response> => {
             clientName = client.business_name || client.contact_person;
             accountantId = client.accountant_id;
 
-            console.log(`✅ Matched to existing client: ${clientName} (${clientId})`);
-            console.log(`📋 Client data:`, JSON.stringify(client));
+            console.log(`✅ Matched to existing client ID: ${clientId}`);
 
             // Send personalized welcome for existing clients
             await sendWhatsAppMessage(phoneNumberId, from, {
@@ -718,14 +719,13 @@ serve(async (req: Request): Promise<Response> => {
               }
             });
           } else {
-            // No existing client found
-            console.log(`⚠️ Unknown phone number ${from} - no client account found`);
-            console.log(`📊 Searched variants: ${phoneVariants.join(', ')}`);
+            // No existing client found - generic message to prevent phone enumeration
+            console.log(`⚠️ Unknown phone number - no client account found`);
 
             await sendWhatsAppMessage(phoneNumberId, from, {
               type: "text",
               text: {
-                body: `⚠️ *Account Not Found*\n\nYour phone number (${from}) is not registered in our system.\n\nPlease ask your accountant to add you as a client first.\n\nFor support, contact your accountant.`
+                body: `⚠️ *Access Unavailable*\n\nPlease contact your accountant to set up your account.\n\nFor support, reach out to your service provider.`
               }
             });
 
@@ -785,6 +785,7 @@ serve(async (req: Request): Promise<Response> => {
     return ok();
   } catch (e) {
     console.error("[whatsapp-webhook] error", e);
-    return bad({ error: String(e) }, 200);
+    // Don't expose internal error details
+    return ok({ message: "Webhook processed" });
   }
 });
