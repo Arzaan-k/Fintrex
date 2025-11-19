@@ -20,10 +20,11 @@ function bad(body: any, status = 400) { return new Response(JSON.stringify(body)
 
 // Session management (in-memory - for production use Redis or database)
 const sessions = new Map<string, {
-  state: 'idle' | 'awaiting_document' | 'awaiting_confirmation' | 'processing';
+  state: 'idle' | 'awaiting_document_type' | 'awaiting_document' | 'awaiting_confirmation' | 'processing';
   documentId?: string;
   clientId?: string;
   accountantId?: string;
+  documentType?: 'invoice' | 'receipt' | 'kyc_document' | 'other';
   lastActivity: number;
 }>();
 
@@ -117,17 +118,65 @@ async function sendWelcomeMessage(phoneNumberId: string, to: string, userName?: 
   });
 }
 
+// Send document type selection
+async function sendDocumentTypeSelection(phoneNumberId: string, to: string) {
+  await sendWhatsAppMessage(phoneNumberId, to, {
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: {
+        text: "📋 *Select Document Type*\n\nWhat type of document would you like to upload?",
+      },
+      action: {
+        buttons: [
+          {
+            type: "reply",
+            reply: {
+              id: "doctype_invoice",
+              title: "📄 Invoice",
+            },
+          },
+          {
+            type: "reply",
+            reply: {
+              id: "doctype_receipt",
+              title: "🧾 Receipt",
+            },
+          },
+          {
+            type: "reply",
+            reply: {
+              id: "doctype_kyc",
+              title: "🆔 KYC Document",
+            },
+          },
+        ],
+      },
+    },
+  });
+
+  const session = sessions.get(to) || { state: 'idle', lastActivity: Date.now() };
+  session.state = 'awaiting_document_type';
+  session.lastActivity = Date.now();
+  sessions.set(to, session);
+}
+
 // Send upload instructions
-async function sendUploadInstructions(phoneNumberId: string, to: string) {
+async function sendUploadInstructions(phoneNumberId: string, to: string, documentType: string = 'invoice') {
+  const typeText = documentType === 'invoice' ? 'invoice' :
+                   documentType === 'receipt' ? 'receipt' :
+                   documentType === 'kyc_document' ? 'KYC document' : 'document';
+
   await sendWhatsAppMessage(phoneNumberId, to, {
     type: "text",
     text: {
-      body: "📸 *Upload Your Document*\n\nPlease send:\n• A photo of your invoice/receipt\n• A PDF document\n• A scanned image\n\nMake sure the image is clear and all text is readable for best results! ✨",
+      body: `📸 *Upload Your ${typeText.charAt(0).toUpperCase() + typeText.slice(1)}*\n\nPlease send:\n• A photo of your ${typeText}\n• A PDF document\n• A scanned image\n\nMake sure the image is clear and all text is readable for best results! ✨`,
     },
   });
 
   const session = sessions.get(to) || { state: 'idle', lastActivity: Date.now() };
   session.state = 'awaiting_document';
+  session.documentType = documentType as any;
   session.lastActivity = Date.now();
   sessions.set(to, session);
 }
@@ -249,7 +298,23 @@ async function handleButtonClick(
 
   // Main menu buttons
   if (buttonId === 'upload_invoice') {
-    await sendUploadInstructions(phoneNumberId, from);
+    await sendDocumentTypeSelection(phoneNumberId, from);
+    return;
+  }
+
+  // Document type selection buttons
+  if (buttonId === 'doctype_invoice') {
+    await sendUploadInstructions(phoneNumberId, from, 'invoice');
+    return;
+  }
+
+  if (buttonId === 'doctype_receipt') {
+    await sendUploadInstructions(phoneNumberId, from, 'receipt');
+    return;
+  }
+
+  if (buttonId === 'doctype_kyc') {
+    await sendUploadInstructions(phoneNumberId, from, 'kyc_document');
     return;
   }
 
@@ -508,6 +573,50 @@ async function sendHelpMessage(phoneNumberId: string, from: string) {
   });
 }
 
+// Notify accountant about unknown number attempting contact
+async function notifyAccountantAboutUnknownNumber(
+  phoneNumberId: string,
+  unknownNumber: string,
+  businessPhoneNumber: string,
+  supabase: any
+) {
+  try {
+    // Find accountant associated with this WhatsApp business number
+    const { data: accountants } = await supabase
+      .from('profiles')
+      .select('id, full_name, email, whatsapp_number')
+      .eq('whatsapp_number', businessPhoneNumber)
+      .limit(1);
+
+    if (!accountants || accountants.length === 0) {
+      console.log(`⚠️ No accountant found for business number: ${businessPhoneNumber}`);
+      return;
+    }
+
+    const accountant = accountants[0];
+
+    // Create a notification record in the database
+    const { error: notificationError } = await supabase
+      .from('notifications')
+      .insert({
+        user_id: accountant.id,
+        title: 'Unknown WhatsApp Contact Attempt',
+        message: `An unknown phone number (${unknownNumber}) attempted to contact your WhatsApp business account. You may want to add them as a client if this is legitimate.`,
+        type: 'warning',
+        read: false,
+        created_at: new Date().toISOString(),
+      });
+
+    if (notificationError) {
+      console.error('❌ Failed to create notification:', notificationError);
+    } else {
+      console.log(`✅ Notified accountant ${accountant.full_name} about unknown number ${unknownNumber}`);
+    }
+  } catch (error) {
+    console.error('❌ Error notifying accountant:', error);
+  }
+}
+
 // Process uploaded document
 async function processDocument(
   phoneNumberId: string,
@@ -517,7 +626,8 @@ async function processDocument(
   filename: string,
   supabase: any,
   clientId: string,
-  accountantId?: string
+  accountantId?: string,
+  documentType: string = 'invoice'
 ) {
   try {
     await sendWhatsAppMessage(phoneNumberId, from, {
@@ -530,6 +640,28 @@ async function processDocument(
     const { bytes, contentType } = await downloadMedia(mediaId);
 
     const path = `${clientId}/${Date.now()}_${filename}`;
+
+    // Check for duplicate documents based on file size and name
+    const { data: existingDocs } = await supabase
+      .from('documents')
+      .select('id, file_name, file_size, created_at')
+      .eq('client_id', clientId)
+      .eq('file_name', filename)
+      .eq('file_size', bytes.length)
+      .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()) // Last 24 hours
+      .limit(1);
+
+    if (existingDocs && existingDocs.length > 0) {
+      await sendWhatsAppMessage(phoneNumberId, from, {
+        type: "text",
+        text: {
+          body: '⚠️ *Duplicate Document Detected*\n\nYou already uploaded this document recently.\n\nIf you want to upload it again, please rename the file or wait 24 hours.',
+        },
+      });
+      sessions.delete(from);
+      return;
+    }
+
     const uploadRes = await supabase.storage.from("documents").upload(path, bytes, { contentType, upsert: false });
     if (uploadRes.error) throw uploadRes.error;
 
@@ -541,9 +673,11 @@ async function processDocument(
         file_path: path,
         file_type: contentType,
         file_size: bytes.length,
-        document_type: 'invoice',
+        document_type: documentType,
         upload_source: 'whatsapp',
         status: 'processing',
+        review_status: 'pending',
+        reviewed_at: null,
       })
       .select()
       .single();
@@ -558,6 +692,50 @@ async function processDocument(
     session.lastActivity = Date.now();
     sessions.set(from, session);
 
+    // Handle different document types
+    if (documentType === 'kyc_document') {
+      // For KYC documents, just upload and notify - no extraction needed
+      await supabase
+        .from('documents')
+        .update({
+          status: 'completed',
+          review_status: 'pending',
+        })
+        .eq('id', document.id);
+
+      await sendWhatsAppMessage(phoneNumberId, from, {
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: {
+            text: '✅ *KYC Document Uploaded Successfully!*\n\nYour KYC document has been uploaded and is pending review by your accountant.\n\nYou will be notified once it is verified.',
+          },
+          action: {
+            buttons: [
+              {
+                type: "reply",
+                reply: {
+                  id: 'upload_another',
+                  title: '📄 Upload Another',
+                },
+              },
+              {
+                type: "reply",
+                reply: {
+                  id: 'main_menu',
+                  title: '🏠 Main Menu',
+                },
+              },
+            ],
+          },
+        },
+      });
+
+      sessions.delete(from);
+      return;
+    }
+
+    // For invoices and receipts, perform OCR and extraction
     // Call OCR function
     const ocrResponse = await fetch(`${SUPABASE_URL}/functions/v1/ocr-secure`, {
       method: 'POST',
@@ -571,7 +749,12 @@ async function processDocument(
       }),
     });
 
-    if (!ocrResponse.ok) throw new Error('OCR processing failed');
+    if (!ocrResponse.ok) {
+      const errorText = await ocrResponse.text();
+      console.error('OCR processing failed:', errorText);
+      throw new Error(`OCR processing failed: ${errorText}`);
+    }
+
     const ocrData = await ocrResponse.json();
 
     // Call extraction function
@@ -589,7 +772,12 @@ async function processDocument(
       }),
     });
 
-    if (!extractResponse.ok) throw new Error('Invoice extraction failed');
+    if (!extractResponse.ok) {
+      const errorText = await extractResponse.text();
+      console.error('Invoice extraction failed:', errorText);
+      throw new Error(`Invoice extraction failed: ${errorText}`);
+    }
+
     const extractData = await extractResponse.json();
 
     await sendExtractionResults(phoneNumberId, from, document.id, extractData, supabase);
@@ -678,10 +866,12 @@ serve(async (req: Request): Promise<Response> => {
           console.log(`🔍 Searching for client with phone variants: ${JSON.stringify(phoneVariants)}`);
 
           // Find client by phone number using .in() for better matching
+          // Only match active clients to ensure proper access control
           const { data: clients, error: clientError } = await supabase
             .from("clients")
             .select("id, phone_number, email, business_name, contact_person, status, accountant_id")
             .in("phone_number", phoneVariants)
+            .eq("status", "active")
             .limit(1);
 
           if (clientError) {
@@ -720,6 +910,17 @@ serve(async (req: Request): Promise<Response> => {
             console.log(`⚠️ Unknown phone number ${from} - no client account found`);
             console.log(`📊 Searched variants: ${phoneVariants.join(', ')}`);
 
+            // Get business phone number from metadata
+            const businessPhoneNumber = value?.metadata?.display_phone_number || phoneNumberId;
+
+            // Notify accountant about this unknown contact attempt
+            await notifyAccountantAboutUnknownNumber(
+              phoneNumberId,
+              from,
+              businessPhoneNumber,
+              supabase
+            );
+
             await sendWhatsAppMessage(phoneNumberId, from, {
               type: "text",
               text: {
@@ -756,8 +957,9 @@ serve(async (req: Request): Promise<Response> => {
               const media = type === "image" ? msg.image : msg.document;
               const mediaId = media?.id;
               const fileName = media?.filename || `${mediaId || 'media'}_${Date.now()}.${type === 'image' ? 'jpg' : 'pdf'}`;
+              const documentType = session.documentType || 'invoice';
               if (mediaId) {
-                await processDocument(phoneNumberId, from, mediaId, media?.mime_type, fileName, supabase, clientId, accountantId);
+                await processDocument(phoneNumberId, from, mediaId, media?.mime_type, fileName, supabase, clientId, accountantId, documentType);
               }
             } else {
               await sendWhatsAppMessage(phoneNumberId, from, {
