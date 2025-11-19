@@ -6,6 +6,7 @@
 // deno-lint-ignore-file no-explicit-any
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getOrCreateSession, updateSession, getSession, clearSession, type SessionState } from "./session-manager.ts";
 
 const WHATSAPP_TOKEN = Deno.env.get("WHATSAPP_TOKEN") || "";
 const VERIFY_TOKEN = Deno.env.get("WHATSAPP_VERIFY_TOKEN") || Deno.env.get("VERIFY_TOKEN") || "";
@@ -17,16 +18,6 @@ const JSON_HEADERS = { "content-type": "application/json" } as const;
 
 function ok(body: any = { status: "ok" }) { return new Response(JSON.stringify(body), { status: 200, headers: JSON_HEADERS }); }
 function bad(body: any, status = 400) { return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS }); }
-
-// Session management (in-memory - for production use Redis or database)
-const sessions = new Map<string, {
-  state: 'idle' | 'awaiting_document_type' | 'awaiting_document' | 'awaiting_confirmation' | 'processing';
-  documentId?: string;
-  clientId?: string;
-  accountantId?: string;
-  documentType?: 'invoice' | 'receipt' | 'kyc_document' | 'other';
-  lastActivity: number;
-}>();
 
 async function downloadMedia(mediaId: string) {
   const metaRes = await fetch(`https://graph.facebook.com/v20.0/${mediaId}`, {
@@ -119,7 +110,7 @@ async function sendWelcomeMessage(phoneNumberId: string, to: string, userName?: 
 }
 
 // Send document type selection
-async function sendDocumentTypeSelection(phoneNumberId: string, to: string) {
+async function sendDocumentTypeSelection(phoneNumberId: string, to: string, supabase: any) {
   await sendWhatsAppMessage(phoneNumberId, to, {
     type: "interactive",
     interactive: {
@@ -155,14 +146,11 @@ async function sendDocumentTypeSelection(phoneNumberId: string, to: string) {
     },
   });
 
-  const session = sessions.get(to) || { state: 'idle', lastActivity: Date.now() };
-  session.state = 'awaiting_document_type';
-  session.lastActivity = Date.now();
-  sessions.set(to, session);
+  await updateSession(supabase, to, { state: 'awaiting_document_type' as SessionState });
 }
 
 // Send upload instructions
-async function sendUploadInstructions(phoneNumberId: string, to: string, documentType: string = 'invoice') {
+async function sendUploadInstructions(phoneNumberId: string, to: string, supabase: any, documentType: string = 'invoice') {
   const typeText = documentType === 'invoice' ? 'invoice' :
                    documentType === 'receipt' ? 'receipt' :
                    documentType === 'kyc_document' ? 'KYC document' : 'document';
@@ -174,11 +162,10 @@ async function sendUploadInstructions(phoneNumberId: string, to: string, documen
     },
   });
 
-  const session = sessions.get(to) || { state: 'idle', lastActivity: Date.now() };
-  session.state = 'awaiting_document';
-  session.documentType = documentType as any;
-  session.lastActivity = Date.now();
-  sessions.set(to, session);
+  await updateSession(supabase, to, {
+    state: 'awaiting_document' as SessionState,
+    document_type: documentType,
+  });
 }
 
 // Send extraction results with confirmation buttons
@@ -277,11 +264,10 @@ async function sendExtractionResults(
       },
     });
 
-    const session = sessions.get(to) || { state: 'idle', lastActivity: Date.now() };
-    session.state = 'awaiting_confirmation';
-    session.documentId = documentId;
-    session.lastActivity = Date.now();
-    sessions.set(to, session);
+    await updateSession(supabase, to, {
+      state: 'awaiting_confirmation' as SessionState,
+      document_id: documentId,
+    });
   }
 }
 
@@ -298,23 +284,23 @@ async function handleButtonClick(
 
   // Main menu buttons
   if (buttonId === 'upload_invoice') {
-    await sendDocumentTypeSelection(phoneNumberId, from);
+    await sendDocumentTypeSelection(phoneNumberId, from, supabase);
     return;
   }
 
   // Document type selection buttons
   if (buttonId === 'doctype_invoice') {
-    await sendUploadInstructions(phoneNumberId, from, 'invoice');
+    await sendUploadInstructions(phoneNumberId, from, supabase, 'invoice');
     return;
   }
 
   if (buttonId === 'doctype_receipt') {
-    await sendUploadInstructions(phoneNumberId, from, 'receipt');
+    await sendUploadInstructions(phoneNumberId, from, supabase, 'receipt');
     return;
   }
 
   if (buttonId === 'doctype_kyc') {
-    await sendUploadInstructions(phoneNumberId, from, 'kyc_document');
+    await sendUploadInstructions(phoneNumberId, from, supabase, 'kyc_document');
     return;
   }
 
@@ -334,7 +320,7 @@ async function handleButtonClick(
   }
 
   if (buttonId === 'upload_another') {
-    await sendUploadInstructions(phoneNumberId, from);
+    await sendDocumentTypeSelection(phoneNumberId, from, supabase);
     return;
   }
 
@@ -347,7 +333,7 @@ async function handleButtonClick(
 
   if (buttonId.startsWith('review_')) {
     const documentId = buttonId.replace('review_', '');
-    await sendReviewLink(phoneNumberId, from, documentId);
+    await sendReviewLink(phoneNumberId, from, documentId, supabase);
     return;
   }
 
@@ -410,12 +396,10 @@ async function approveDocument(phoneNumberId: string, from: string, documentId: 
       },
     },
   });
-
-  sessions.delete(from);
 }
 
 // Send review link
-async function sendReviewLink(phoneNumberId: string, from: string, documentId: string) {
+async function sendReviewLink(phoneNumberId: string, from: string, documentId: string, supabase: any) {
   const reviewUrl = `${APP_URL}/review-queue`;
 
   await sendWhatsAppMessage(phoneNumberId, from, {
@@ -425,7 +409,7 @@ async function sendReviewLink(phoneNumberId: string, from: string, documentId: s
     },
   });
 
-  sessions.delete(from);
+  await clearSession(supabase, from);
 }
 
 // Reject document
@@ -475,7 +459,7 @@ async function rejectDocument(phoneNumberId: string, from: string, documentId: s
     },
   });
 
-  sessions.delete(from);
+  await clearSession(supabase, from);
 }
 
 // Send status update
@@ -658,7 +642,7 @@ async function processDocument(
           body: '⚠️ *Duplicate Document Detected*\n\nYou already uploaded this document recently.\n\nIf you want to upload it again, please rename the file or wait 24 hours.',
         },
       });
-      sessions.delete(from);
+      await clearSession(supabase, from);
       return;
     }
 
@@ -684,13 +668,12 @@ async function processDocument(
 
     if (docError) throw docError;
 
-    const session = sessions.get(from) || { state: 'idle', lastActivity: Date.now() };
-    session.state = 'processing';
-    session.documentId = document.id;
-    session.clientId = clientId;
-    session.accountantId = accountantId;
-    session.lastActivity = Date.now();
-    sessions.set(from, session);
+    await updateSession(supabase, from, {
+      state: 'processing' as SessionState,
+      document_id: document.id,
+      client_id: clientId,
+      accountant_id: accountantId,
+    });
 
     // Handle different document types
     if (documentType === 'kyc_document') {
@@ -731,7 +714,7 @@ async function processDocument(
         },
       });
 
-      sessions.delete(from);
+      await clearSession(supabase, from);
       return;
     }
 
@@ -790,7 +773,7 @@ async function processDocument(
         body: `❌ *Processing Failed*\n\nSorry, I couldn't process your document.\n\nError: ${error.message}\n\nPlease try again or contact support.`,
       },
     });
-    sessions.delete(from);
+    await clearSession(supabase, from);
   }
 }
 
@@ -897,14 +880,6 @@ serve(async (req: Request): Promise<Response> => {
             accountantId = client.accountant_id;
 
             console.log(`✅ Matched to existing client: ${clientName} (ID: ${clientId})`);
-
-            // Send personalized welcome for existing clients
-            await sendWhatsAppMessage(phoneNumberId, from, {
-              type: "text",
-              text: {
-                body: `Welcome back, ${clientName}! 👋\n\nYour documents will be automatically linked to your account.\n\nSend me an invoice to get started! 📄`
-              }
-            });
           } else {
             // No existing client found
             console.log(`⚠️ Unknown phone number ${from} - no client account found`);
@@ -939,6 +914,10 @@ serve(async (req: Request): Promise<Response> => {
             continue;
           }
 
+          // Get or create session for this user
+          const session = await getOrCreateSession(supabase, from, clientId, accountantId);
+          console.log(`📊 Session state for ${from}: ${session.state}`);
+
           // Handle message types
           if (type === "text") {
             const text = msg.text?.body?.toLowerCase() || '';
@@ -952,16 +931,21 @@ serve(async (req: Request): Promise<Response> => {
               await sendWelcomeMessage(phoneNumberId, from, clientName);
             }
           } else if (type === "image" || type === "document") {
-            const session = sessions.get(from);
+            console.log(`📎 Received ${type} from ${from}, session state: ${session.state}`);
+
             if (session?.state === 'awaiting_document') {
               const media = type === "image" ? msg.image : msg.document;
               const mediaId = media?.id;
               const fileName = media?.filename || `${mediaId || 'media'}_${Date.now()}.${type === 'image' ? 'jpg' : 'pdf'}`;
-              const documentType = session.documentType || 'invoice';
+              const documentType = session.document_type || 'invoice';
+
+              console.log(`✅ Processing ${type}: ${fileName}, type: ${documentType}`);
+
               if (mediaId) {
                 await processDocument(phoneNumberId, from, mediaId, media?.mime_type, fileName, supabase, clientId, accountantId, documentType);
               }
             } else {
+              console.log(`⚠️ Received ${type} but session state is ${session.state}, not 'awaiting_document'`);
               await sendWhatsAppMessage(phoneNumberId, from, {
                 type: "text",
                 text: { body: 'Please use the "Upload Invoice" button to start uploading documents. 📄' },
