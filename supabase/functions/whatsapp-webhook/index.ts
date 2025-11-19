@@ -6,7 +6,6 @@
 // deno-lint-ignore-file no-explicit-any
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { getOrCreateSession, updateSession, getSession, clearSession, type SessionState } from "./session-manager.ts";
 
 const WHATSAPP_TOKEN = Deno.env.get("WHATSAPP_TOKEN") || "";
 const VERIFY_TOKEN = Deno.env.get("WHATSAPP_VERIFY_TOKEN") || Deno.env.get("VERIFY_TOKEN") || "";
@@ -15,6 +14,139 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "
 const APP_URL = Deno.env.get("APP_URL") || "https://app.fintrex.ai";
 
 const JSON_HEADERS = { "content-type": "application/json" } as const;
+
+// ============================================
+// Session Management (Inlined from session-manager.ts)
+// ============================================
+interface WhatsAppSession {
+  id?: string;
+  phone_number: string;
+  client_id?: string;
+  accountant_id?: string;
+  state: SessionState;
+  document_id?: string;
+  document_type?: string;
+  kyc_checklist_item_id?: string;
+  context?: any;
+  last_activity: string;
+  expires_at: string;
+}
+
+type SessionState =
+  | 'idle'
+  | 'awaiting_document_type'
+  | 'awaiting_document'
+  | 'awaiting_confirmation'
+  | 'processing'
+  | 'kyc_flow'
+  | 'awaiting_kyc_document'
+  | 'payment_tracking';
+
+async function getOrCreateSession(
+  supabase: any,
+  phoneNumber: string,
+  clientId?: string,
+  accountantId?: string
+): Promise<WhatsAppSession> {
+  const { data: existingSessions } = await supabase
+    .from('whatsapp_sessions')
+    .select('*')
+    .eq('phone_number', phoneNumber)
+    .gt('expires_at', new Date().toISOString())
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (existingSessions && existingSessions.length > 0) {
+    const session = existingSessions[0];
+    await supabase
+      .from('whatsapp_sessions')
+      .update({
+        last_activity: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        client_id: clientId || session.client_id,
+        accountant_id: accountantId || session.accountant_id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', session.id);
+
+    return {
+      ...session,
+      client_id: clientId || session.client_id,
+      accountant_id: accountantId || session.accountant_id,
+    };
+  }
+
+  const newSession = {
+    phone_number: phoneNumber,
+    client_id: clientId,
+    accountant_id: accountantId,
+    state: 'idle' as SessionState,
+    context: {},
+    last_activity: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data: createdSession, error } = await supabase
+    .from('whatsapp_sessions')
+    .insert(newSession)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error creating session:', error);
+    throw new Error('Failed to create session');
+  }
+
+  return createdSession;
+}
+
+async function updateSession(
+  supabase: any,
+  phoneNumber: string,
+  updates: Partial<WhatsAppSession>
+): Promise<void> {
+  const updateData = {
+    ...updates,
+    last_activity: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase
+    .from('whatsapp_sessions')
+    .update(updateData)
+    .eq('phone_number', phoneNumber)
+    .gt('expires_at', new Date().toISOString());
+
+  if (error) {
+    console.error('Error updating session:', error);
+  }
+}
+
+async function clearSession(
+  supabase: any,
+  phoneNumber: string
+): Promise<void> {
+  await supabase
+    .from('whatsapp_sessions')
+    .update({
+      state: 'idle',
+      document_id: null,
+      document_type: null,
+      kyc_checklist_item_id: null,
+      context: {},
+      updated_at: new Date().toISOString(),
+    })
+    .eq('phone_number', phoneNumber);
+
+  console.log(`🧹 Cleared session for ${phoneNumber}`);
+}
+
+// ============================================
+// End Session Management
+// ============================================
 
 function ok(body: any = { status: "ok" }) { return new Response(JSON.stringify(body), { status: 200, headers: JSON_HEADERS }); }
 function bad(body: any, status = 400) { return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS }); }
