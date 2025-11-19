@@ -866,12 +866,12 @@ serve(async (req: Request): Promise<Response> => {
           console.log(`🔍 Searching for client with phone variants: ${JSON.stringify(phoneVariants)}`);
 
           // Find client by phone number using .in() for better matching
-          // Only match active clients to ensure proper access control
+          // Match active and kyc_pending clients (exclude inactive/suspended)
           const { data: clients, error: clientError } = await supabase
             .from("clients")
             .select("id, phone_number, email, business_name, contact_person, status, accountant_id")
             .in("phone_number", phoneVariants)
-            .eq("status", "active")
+            .in("status", ["active", "kyc_pending"])
             .limit(1);
 
           if (clientError) {
