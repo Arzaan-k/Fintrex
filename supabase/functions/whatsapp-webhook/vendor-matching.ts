@@ -83,7 +83,7 @@ export async function matchVendorByGSTIN(
   if (!gstin || gstin.length !== 15) return null;
 
   const { data: vendors } = await supabase
-    .from('vendors')
+    .from('vendor_master')
     .select('*')
     .eq('accountant_id', accountantId)
     .eq('gstin', gstin)
@@ -105,7 +105,7 @@ export async function matchVendorByPAN(
   if (!pan || pan.length !== 10) return null;
 
   const { data: vendors } = await supabase
-    .from('vendors')
+    .from('vendor_master')
     .select('*')
     .eq('accountant_id', accountantId)
     .eq('pan', pan)
@@ -129,7 +129,7 @@ export async function matchVendorByName(
 
   // Get all vendors for this accountant
   const { data: vendors } = await supabase
-    .from('vendors')
+    .from('vendor_master')
     .select('*')
     .eq('accountant_id', accountantId)
     .eq('is_active', true);
@@ -212,7 +212,7 @@ export async function findOrCreateVendor(
           alternateNames.push(vendorData.name);
 
           await supabase
-            .from('vendors')
+            .from('vendor_master')
             .update({ alternate_names: alternateNames, updated_at: new Date().toISOString() })
             .eq('id', vendorByGSTIN.id);
         }
@@ -257,7 +257,7 @@ export async function findOrCreateVendor(
   };
 
   const { data: createdVendor, error } = await supabase
-    .from('vendors')
+    .from('vendor_master')
     .insert(newVendor)
     .select()
     .single();
@@ -285,14 +285,14 @@ export async function updateVendorStats(
 
   // If RPC doesn't exist, use direct update
   const { data: vendor } = await supabase
-    .from('vendors')
+    .from('vendor_master')
     .select('total_transactions, total_amount')
     .eq('id', vendorId)
     .single();
 
   if (vendor) {
     await supabase
-      .from('vendors')
+      .from('vendor_master')
       .update({
         total_transactions: (vendor.total_transactions || 0) + 1,
         total_amount: (vendor.total_amount || 0) + transactionAmount,
@@ -316,7 +316,7 @@ export async function getVendorSuggestions(
   const normalizedSearch = normalizeVendorName(searchTerm);
 
   const { data: vendors } = await supabase
-    .from('vendors')
+    .from('vendor_master')
     .select('*')
     .eq('accountant_id', accountantId)
     .eq('is_active', true)
@@ -354,7 +354,7 @@ export async function mergeDuplicateVendors(
 ): Promise<void> {
   // Get both vendors
   const { data: vendors } = await supabase
-    .from('vendors')
+    .from('vendor_master')
     .select('*')
     .in('id', [primaryVendorId, duplicateVendorId]);
 
@@ -382,7 +382,7 @@ export async function mergeDuplicateVendors(
 
   // Update primary vendor with merged data
   await supabase
-    .from('vendors')
+    .from('vendor_master')
     .update({
       alternate_names: mergedAlternateNames,
       total_transactions: primary.total_transactions + duplicate.total_transactions,
@@ -397,7 +397,7 @@ export async function mergeDuplicateVendors(
 
   // Deactivate duplicate vendor
   await supabase
-    .from('vendors')
+    .from('vendor_master')
     .update({
       is_active: false,
       updated_at: new Date().toISOString()
