@@ -17,23 +17,26 @@ CREATE TABLE IF NOT EXISTS vendor_mappings (
   UNIQUE(accountant_id, normalized_name)
 );
 
-CREATE INDEX idx_vendor_mappings_accountant ON vendor_mappings(accountant_id);
-CREATE INDEX idx_vendor_mappings_normalized ON vendor_mappings(normalized_name);
-CREATE INDEX idx_vendor_mappings_category ON vendor_mappings(category);
+CREATE INDEX IF NOT EXISTS idx_vendor_mappings_accountant ON vendor_mappings(accountant_id);
+CREATE INDEX IF NOT EXISTS idx_vendor_mappings_normalized ON vendor_mappings(normalized_name);
+CREATE INDEX IF NOT EXISTS idx_vendor_mappings_category ON vendor_mappings(category);
 
 -- Enable RLS
 ALTER TABLE vendor_mappings ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies
+DROP POLICY IF EXISTS "Accountants can view their own vendor mappings" ON vendor_mappings;
 CREATE POLICY "Accountants can view their own vendor mappings"
   ON vendor_mappings FOR SELECT
   USING (accountant_id = auth.uid());
 
+DROP POLICY IF EXISTS "Accountants can manage their own vendor mappings" ON vendor_mappings;
 CREATE POLICY "Accountants can manage their own vendor mappings"
   ON vendor_mappings FOR ALL
   USING (accountant_id = auth.uid());
 
 -- Trigger for updated_at
+DROP TRIGGER IF EXISTS update_vendor_mappings_updated_at ON vendor_mappings;
 CREATE TRIGGER update_vendor_mappings_updated_at
   BEFORE UPDATE ON vendor_mappings
   FOR EACH ROW
