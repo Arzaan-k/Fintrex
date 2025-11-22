@@ -356,6 +356,38 @@ async function handleButtonClick(
     await sendDocumentDetails(phoneNumberId, from, documentId, supabase);
     return;
   }
+
+  // Payment action buttons
+  if (buttonId.startsWith('mark_paid_')) {
+    const invoiceId = buttonId.replace('mark_paid_', '');
+    await markInvoiceAsPaid(phoneNumberId, from, invoiceId, supabase);
+    return;
+  }
+
+  if (buttonId.startsWith('view_invoice_')) {
+    const invoiceId = buttonId.replace('view_invoice_', '');
+    await sendInvoiceDetails(phoneNumberId, from, invoiceId, supabase);
+    return;
+  }
+
+  // Anomaly action buttons
+  if (buttonId.startsWith('review_anomaly_')) {
+    const documentId = buttonId.replace('review_anomaly_', '');
+    await sendReviewLink(phoneNumberId, from, documentId, supabase);
+    return;
+  }
+
+  if (buttonId.startsWith('ignore_anomaly_')) {
+    const documentId = buttonId.replace('ignore_anomaly_', '');
+    await ignoreAnomaly(phoneNumberId, from, documentId, supabase);
+    return;
+  }
+
+  // KYC upload button
+  if (buttonId === 'upload_kyc') {
+    await sendUploadInstructions(phoneNumberId, from, supabase, 'kyc_document');
+    return;
+  }
 }
 
 // Approve document
@@ -566,6 +598,178 @@ async function sendHelpMessage(phoneNumberId: string, from: string) {
             `Reply with "support" to talk to our team.`,
     },
   });
+}
+
+// Mark invoice as paid
+async function markInvoiceAsPaid(phoneNumberId: string, from: string, invoiceId: string, supabase: any) {
+  try {
+    // Get invoice details
+    const { data: invoice, error: invoiceError } = await supabase
+      .from('invoices')
+      .select('*, payment_reminders(*)')
+      .eq('id', invoiceId)
+      .single();
+
+    if (invoiceError || !invoice) {
+      await sendWhatsAppMessage(phoneNumberId, from, {
+        type: "text",
+        text: { body: '❌ Invoice not found.' },
+      });
+      return;
+    }
+
+    // Update payment reminder status
+    if (invoice.payment_reminders && invoice.payment_reminders.length > 0) {
+      await supabase
+        .from('payment_reminders')
+        .update({
+          status: 'paid',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('invoice_id', invoiceId);
+    }
+
+    // Create payment record
+    const { error: paymentError } = await supabase
+      .from('payments')
+      .insert({
+        invoice_id: invoiceId,
+        client_id: invoice.client_id,
+        amount: invoice.grand_total,
+        payment_date: new Date().toISOString(),
+        payment_method: 'whatsapp_confirmed',
+        status: 'completed',
+        created_at: new Date().toISOString(),
+      });
+
+    if (paymentError) {
+      console.error('Error creating payment record:', paymentError);
+    }
+
+    await sendWhatsAppMessage(phoneNumberId, from, {
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: {
+          text: `✅ *Payment Marked as Paid!*\n\n` +
+                `Invoice: ${invoice.invoice_number}\n` +
+                `Vendor: ${invoice.vendor_name}\n` +
+                `Amount: ₹${invoice.grand_total}\n\n` +
+                `Your payment has been recorded in your books! 📊`,
+        },
+        action: {
+          buttons: [
+            {
+              type: "reply",
+              reply: {
+                id: 'main_menu',
+                title: '🏠 Main Menu',
+              },
+            },
+          ],
+        },
+      },
+    });
+
+  } catch (error) {
+    console.error('Error marking invoice as paid:', error);
+    await sendWhatsAppMessage(phoneNumberId, from, {
+      type: "text",
+      text: { body: '❌ Failed to mark invoice as paid. Please try again.' },
+    });
+  }
+}
+
+// Send invoice details
+async function sendInvoiceDetails(phoneNumberId: string, from: string, invoiceId: string, supabase: any) {
+  const { data: invoice, error } = await supabase
+    .from('invoices')
+    .select('*, payment_reminders(*)')
+    .eq('id', invoiceId)
+    .single();
+
+  if (error || !invoice) {
+    await sendWhatsAppMessage(phoneNumberId, from, {
+      type: "text",
+      text: { body: '❌ Invoice not found.' },
+    });
+    return;
+  }
+
+  const paymentReminder = invoice.payment_reminders?.[0];
+  const dueDate = paymentReminder?.due_date ? new Date(paymentReminder.due_date) : null;
+  const daysUntilDue = dueDate ? Math.ceil((dueDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : null;
+
+  let statusText = '';
+  if (paymentReminder?.status === 'paid') {
+    statusText = '✅ Paid';
+  } else if (paymentReminder?.status === 'overdue') {
+    statusText = `🔴 Overdue by ${Math.abs(daysUntilDue || 0)} days`;
+  } else if (daysUntilDue !== null && daysUntilDue <= 3) {
+    statusText = `⚠️ Due in ${daysUntilDue} days`;
+  } else {
+    statusText = '📅 Pending';
+  }
+
+  await sendWhatsAppMessage(phoneNumberId, from, {
+    type: "text",
+    text: {
+      body: `📄 *Invoice Details*\n\n` +
+            `Invoice #: ${invoice.invoice_number}\n` +
+            `Date: ${new Date(invoice.invoice_date).toLocaleDateString()}\n` +
+            `Vendor: ${invoice.vendor_name}\n` +
+            `Amount: ₹${invoice.grand_total}\n` +
+            `GSTIN: ${invoice.vendor_gstin || 'N/A'}\n\n` +
+            `Status: ${statusText}\n` +
+            (dueDate ? `Due Date: ${dueDate.toLocaleDateString()}\n` : ''),
+    },
+  });
+}
+
+// Ignore anomaly
+async function ignoreAnomaly(phoneNumberId: string, from: string, documentId: string, supabase: any) {
+  try {
+    // Update anomaly status to ignored
+    const { error } = await supabase
+      .from('anomalies')
+      .update({
+        status: 'ignored',
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq('document_id', documentId);
+
+    if (error) {
+      throw error;
+    }
+
+    await sendWhatsAppMessage(phoneNumberId, from, {
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: {
+          text: '✅ *Anomaly Ignored*\n\nThe anomaly has been marked as ignored and will not appear again.',
+        },
+        action: {
+          buttons: [
+            {
+              type: "reply",
+              reply: {
+                id: 'main_menu',
+                title: '🏠 Main Menu',
+              },
+            },
+          ],
+        },
+      },
+    });
+
+  } catch (error) {
+    console.error('Error ignoring anomaly:', error);
+    await sendWhatsAppMessage(phoneNumberId, from, {
+      type: "text",
+      text: { body: '❌ Failed to ignore anomaly. Please try again.' },
+    });
+  }
 }
 
 // Notify accountant about unknown number attempting contact
