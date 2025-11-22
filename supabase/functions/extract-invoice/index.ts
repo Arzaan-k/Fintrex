@@ -41,7 +41,7 @@ OUTPUT FORMAT: Return ONLY valid JSON with this structure:
 }`;
 
 /**
- * Extract invoice data using Groq API (Llama 3.1 - Ultra Fast)
+ * Extract invoice data using Groq API (Llama 3.3 - Ultra Fast)
  */
 async function extractWithGroq(ocrText: string, apiKey: string): Promise<any> {
   const response = await fetch(
@@ -53,7 +53,7 @@ async function extractWithGroq(ocrText: string, apiKey: string): Promise<any> {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'llama-3.1-70b-versatile', // Best for structured extraction
+        model: 'llama-3.3-70b-versatile', // Latest Llama 3.3 (3.1 decommissioned)
         messages: [
           {
             role: 'system',
@@ -361,9 +361,9 @@ serve(async (req: Request): Promise<Response> => {
 
     if (groqApiKey) {
       // Real extraction using Groq (fastest)
-      console.log('📄 Extracting invoice with Groq Llama 3.1 (ultra-fast)...');
+      console.log('📄 Extracting invoice with Groq Llama 3.3 (ultra-fast)...');
       extracted = await extractWithGroq(body.ocrText, groqApiKey);
-      processingMethod = 'groq_llama';
+      processingMethod = 'groq_llama_3.3';
       console.log(`✅ Extraction complete. Confidence: ${extracted.confidence_scores?.overall || 'N/A'}`);
     } else if (nvidiaApiKey) {
       // Real extraction using NVIDIA
