@@ -41,6 +41,62 @@ OUTPUT FORMAT: Return ONLY valid JSON with this structure:
 }`;
 
 /**
+ * Extract invoice data using Groq API (Llama 3.1 - Ultra Fast)
+ */
+async function extractWithGroq(ocrText: string, apiKey: string): Promise<any> {
+  const response = await fetch(
+    'https://api.groq.com/openai/v1/chat/completions',
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'llama-3.1-70b-versatile', // Best for structured extraction
+        messages: [
+          {
+            role: 'system',
+            content: INDIAN_INVOICE_EXTRACTION_PROMPT
+          },
+          {
+            role: 'user',
+            content: `Extract invoice data from the following OCR text:\n\n${ocrText}`
+          }
+        ],
+        temperature: 0.1,
+        max_tokens: 4096,
+        response_format: { type: 'json_object' }
+      })
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('Groq API Error:', errorText);
+    throw new Error(`Groq API error: ${response.status} - ${errorText}`);
+  }
+
+  const data = await response.json();
+  const responseText = data.choices?.[0]?.message?.content || '{}';
+
+  console.log('📄 Groq Response preview:', responseText.substring(0, 200) + '...');
+
+  // Parse JSON response
+  try {
+    return JSON.parse(responseText);
+  } catch (e) {
+    // Try to extract JSON from text if wrapped in markdown
+    const jsonMatch = responseText.match(/```json\s*([\s\S]*?)\s*```/) ||
+                     responseText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[1] || jsonMatch[0]);
+    }
+    throw new Error(`Failed to parse Groq response as JSON: ${e}`);
+  }
+}
+
+/**
  * Extract invoice data using NVIDIA API (Google Gemma model)
  */
 async function extractWithNvidia(ocrText: string, apiKey: string): Promise<any> {
@@ -295,18 +351,25 @@ serve(async (req: Request): Promise<Response> => {
       );
     }
 
-    // Check for API keys (NVIDIA preferred, then Gemini)
+    // Check for API keys (Groq preferred for speed, then NVIDIA, then Gemini)
+    const groqApiKey = Deno.env.get("GROQ_API_KEY");
     const nvidiaApiKey = Deno.env.get("NVIDIA_API_KEY");
     const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
 
     let extracted: any;
     let processingMethod: string;
 
-    if (nvidiaApiKey) {
-      // Real extraction using NVIDIA Llama
-      console.log('📄 Extracting invoice with NVIDIA Llama 3.1...');
+    if (groqApiKey) {
+      // Real extraction using Groq (fastest)
+      console.log('📄 Extracting invoice with Groq Llama 3.1 (ultra-fast)...');
+      extracted = await extractWithGroq(body.ocrText, groqApiKey);
+      processingMethod = 'groq_llama';
+      console.log(`✅ Extraction complete. Confidence: ${extracted.confidence_scores?.overall || 'N/A'}`);
+    } else if (nvidiaApiKey) {
+      // Real extraction using NVIDIA
+      console.log('📄 Extracting invoice with NVIDIA Gemma...');
       extracted = await extractWithNvidia(body.ocrText, nvidiaApiKey);
-      processingMethod = 'nvidia_llama';
+      processingMethod = 'nvidia_gemma';
       console.log(`✅ Extraction complete. Confidence: ${extracted.confidence_scores?.overall || 'N/A'}`);
     } else if (geminiApiKey) {
       // Real extraction using Gemini
@@ -316,7 +379,7 @@ serve(async (req: Request): Promise<Response> => {
       console.log(`✅ Extraction complete. Confidence: ${extracted.confidence_scores?.overall || 'N/A'}`);
     } else {
       // Fallback to mock for testing
-      console.warn('⚠️ No NVIDIA_API_KEY or GEMINI_API_KEY found - using mock data');
+      console.warn('⚠️ No GROQ_API_KEY, NVIDIA_API_KEY, or GEMINI_API_KEY found - using mock data');
       extracted = mockInvoice();
       processingMethod = 'mock';
     }
