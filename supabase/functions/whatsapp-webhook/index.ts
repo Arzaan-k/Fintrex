@@ -801,13 +801,16 @@ async function processDocument(
 
   } catch (error) {
     console.error('Document processing error:', error);
+
+    // Clear session on error to prevent stuck state
+    await clearSession(supabase, from);
+
     await sendWhatsAppMessage(phoneNumberId, from, {
       type: "text",
       text: {
         body: `❌ *Processing Failed*\n\nSorry, I couldn't process your document.\n\nError: ${error.message}\n\nPlease try again or contact support.`,
       },
     });
-    await clearSession(supabase, from);
   }
 }
 
