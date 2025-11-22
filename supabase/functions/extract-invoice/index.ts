@@ -41,7 +41,7 @@ OUTPUT FORMAT: Return ONLY valid JSON with this structure:
 }`;
 
 /**
- * Extract invoice data using NVIDIA Llama model
+ * Extract invoice data using NVIDIA API (Google Gemma model)
  */
 async function extractWithNvidia(ocrText: string, apiKey: string): Promise<any> {
   const response = await fetch(
@@ -50,34 +50,37 @@ async function extractWithNvidia(ocrText: string, apiKey: string): Promise<any> 
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
       },
       body: JSON.stringify({
-        model: 'meta/llama-3.1-70b-instruct',
+        model: 'google/gemma-3n-e2b-it',
         messages: [
           {
-            role: 'system',
-            content: INDIAN_INVOICE_EXTRACTION_PROMPT
-          },
-          {
             role: 'user',
-            content: `Extract invoice data from the following OCR text:\n\n${ocrText}`
+            content: `${INDIAN_INVOICE_EXTRACTION_PROMPT}\n\nExtract invoice data from the following OCR text:\n\n${ocrText}`
           }
         ],
-        temperature: 0.1,
-        max_tokens: 8192,
-        response_format: { type: 'json_object' }
+        temperature: 0.20,
+        top_p: 0.70,
+        max_tokens: 4096,
+        frequency_penalty: 0.00,
+        presence_penalty: 0.00,
+        stream: false
       })
     }
   );
 
   if (!response.ok) {
     const errorText = await response.text();
+    console.error('NVIDIA API Error:', errorText);
     throw new Error(`NVIDIA API error: ${response.status} - ${errorText}`);
   }
 
   const data = await response.json();
   const responseText = data.choices?.[0]?.message?.content || '{}';
+
+  console.log('📄 NVIDIA Response preview:', responseText.substring(0, 200) + '...');
 
   // Parse JSON response
   try {
