@@ -41,6 +41,59 @@ OUTPUT FORMAT: Return ONLY valid JSON with this structure:
 }`;
 
 /**
+ * Extract invoice data using NVIDIA Llama model
+ */
+async function extractWithNvidia(ocrText: string, apiKey: string): Promise<any> {
+  const response = await fetch(
+    'https://integrate.api.nvidia.com/v1/chat/completions',
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'meta/llama-3.1-70b-instruct',
+        messages: [
+          {
+            role: 'system',
+            content: INDIAN_INVOICE_EXTRACTION_PROMPT
+          },
+          {
+            role: 'user',
+            content: `Extract invoice data from the following OCR text:\n\n${ocrText}`
+          }
+        ],
+        temperature: 0.1,
+        max_tokens: 8192,
+        response_format: { type: 'json_object' }
+      })
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`NVIDIA API error: ${response.status} - ${errorText}`);
+  }
+
+  const data = await response.json();
+  const responseText = data.choices?.[0]?.message?.content || '{}';
+
+  // Parse JSON response
+  try {
+    return JSON.parse(responseText);
+  } catch (e) {
+    // Try to extract JSON from text if wrapped in markdown
+    const jsonMatch = responseText.match(/```json\s*([\s\S]*?)\s*```/) ||
+                     responseText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[1] || jsonMatch[0]);
+    }
+    throw new Error(`Failed to parse NVIDIA response as JSON: ${e}`);
+  }
+}
+
+/**
  * Extract invoice data using Gemini with structured prompts
  */
 async function extractWithGemini(ocrText: string, apiKey: string): Promise<any> {
@@ -239,20 +292,28 @@ serve(async (req: Request): Promise<Response> => {
       );
     }
 
-    const apiKey = Deno.env.get("GEMINI_API_KEY");
+    // Check for API keys (NVIDIA preferred, then Gemini)
+    const nvidiaApiKey = Deno.env.get("NVIDIA_API_KEY");
+    const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
 
     let extracted: any;
     let processingMethod: string;
 
-    if (apiKey) {
+    if (nvidiaApiKey) {
+      // Real extraction using NVIDIA Llama
+      console.log('📄 Extracting invoice with NVIDIA Llama 3.1...');
+      extracted = await extractWithNvidia(body.ocrText, nvidiaApiKey);
+      processingMethod = 'nvidia_llama';
+      console.log(`✅ Extraction complete. Confidence: ${extracted.confidence_scores?.overall || 'N/A'}`);
+    } else if (geminiApiKey) {
       // Real extraction using Gemini
       console.log('📄 Extracting invoice with Gemini...');
-      extracted = await extractWithGemini(body.ocrText, apiKey);
+      extracted = await extractWithGemini(body.ocrText, geminiApiKey);
       processingMethod = 'gemini';
       console.log(`✅ Extraction complete. Confidence: ${extracted.confidence_scores?.overall || 'N/A'}`);
     } else {
       // Fallback to mock for testing
-      console.warn('⚠️ No GEMINI_API_KEY found - using mock data');
+      console.warn('⚠️ No NVIDIA_API_KEY or GEMINI_API_KEY found - using mock data');
       extracted = mockInvoice();
       processingMethod = 'mock';
     }
