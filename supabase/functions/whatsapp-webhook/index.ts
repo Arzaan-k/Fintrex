@@ -72,7 +72,10 @@ async function sendWhatsAppMessage(phoneNumberId: string, to: string, message: a
 }
 
 // Send welcome message with menu buttons
-async function sendWelcomeMessage(phoneNumberId: string, to: string, userName?: string) {
+async function sendWelcomeMessage(phoneNumberId: string, to: string, supabase: any, userName?: string) {
+  // Clear session when showing welcome/main menu
+  await clearSession(supabase, to);
+
   await sendWhatsAppMessage(phoneNumberId, to, {
     type: "interactive",
     interactive: {
@@ -220,6 +223,9 @@ async function sendExtractionResults(
         },
       },
     });
+
+    // Clear session after auto-approval since workflow is complete
+    await clearSession(supabase, to);
   } else {
     await sendWhatsAppMessage(phoneNumberId, to, {
       type: "interactive",
@@ -315,11 +321,13 @@ async function handleButtonClick(
   }
 
   if (buttonId === 'main_menu') {
-    await sendWelcomeMessage(phoneNumberId, from);
+    await sendWelcomeMessage(phoneNumberId, from, supabase);
     return;
   }
 
   if (buttonId === 'upload_another') {
+    // Clear session before starting new upload flow
+    await clearSession(supabase, from);
     await sendDocumentTypeSelection(phoneNumberId, from, supabase);
     return;
   }
@@ -396,6 +404,9 @@ async function approveDocument(phoneNumberId: string, from: string, documentId: 
       },
     },
   });
+
+  // Clear session after approval
+  await clearSession(supabase, from);
 }
 
 // Send review link
@@ -922,13 +933,14 @@ serve(async (req: Request): Promise<Response> => {
           if (type === "text") {
             const text = msg.text?.body?.toLowerCase() || '';
             if (text.includes('hi') || text.includes('hello') || text.includes('start')) {
-              await sendWelcomeMessage(phoneNumberId, from, clientName);
+              await sendWelcomeMessage(phoneNumberId, from, supabase, clientName);
             } else if (text.includes('help')) {
               await sendHelpMessage(phoneNumberId, from);
             } else if (text.includes('status')) {
               await sendStatusUpdate(phoneNumberId, from, supabase, clientId);
             } else {
-              await sendWelcomeMessage(phoneNumberId, from, clientName);
+              // For any other text, show welcome message and reset flow
+              await sendWelcomeMessage(phoneNumberId, from, supabase, clientName);
             }
           } else if (type === "image" || type === "document") {
             console.log(`📎 Received ${type} from ${from}, session state: ${session.state}`);
@@ -946,10 +958,8 @@ serve(async (req: Request): Promise<Response> => {
               }
             } else {
               console.log(`⚠️ Received ${type} but session state is ${session.state}, not 'awaiting_document'`);
-              await sendWhatsAppMessage(phoneNumberId, from, {
-                type: "text",
-                text: { body: 'Please use the "Upload Invoice" button to start uploading documents. 📄' },
-              });
+              // Clear session and show main menu to restart flow
+              await sendWelcomeMessage(phoneNumberId, from, supabase, clientName);
             }
           } else if (type === "interactive") {
             if (msg.interactive?.type === 'button_reply') {
