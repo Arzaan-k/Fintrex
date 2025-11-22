@@ -730,12 +730,18 @@ async function processDocument(
     }
 
     // For invoices and receipts, perform OCR and extraction
-    // Get public URL for the uploaded file
-    const { data: urlData } = supabase.storage
+    // Get signed URL for the uploaded file (valid for 1 hour)
+    const { data: urlData, error: urlError } = await supabase.storage
       .from('documents')
-      .getPublicUrl(path);
+      .createSignedUrl(path, 3600); // 3600 seconds = 1 hour
 
-    const fileUrl = urlData.publicUrl;
+    if (urlError || !urlData?.signedUrl) {
+      console.error('Failed to create signed URL:', urlError);
+      throw new Error('Failed to generate file URL for OCR processing');
+    }
+
+    const fileUrl = urlData.signedUrl;
+    console.log(`📎 Generated signed URL for file: ${path}`);
 
     // Call OCR function
     const ocrResponse = await fetch(`${SUPABASE_URL}/functions/v1/ocr-secure`, {
