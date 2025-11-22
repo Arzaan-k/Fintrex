@@ -18,6 +18,7 @@ import ClientDashboard from "./pages/ClientDashboard";
 import Settings from "./pages/Settings";
 import OCRTest from "./pages/OCRTest";
 import ReviewQueue from "./pages/ReviewQueue";
+import AccountingReports from "./pages/AccountingReports";
 
 const queryClient = new QueryClient();
 
@@ -46,6 +47,7 @@ const App = () => (
             <Route path="client-dashboard" element={<ClientDashboard />} />
             <Route path="ocr-test" element={<OCRTest />} />
             <Route path="review-queue" element={<ReviewQueue />} />
+            <Route path="accounting-reports" element={<AccountingReports />} />
           </Route>
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />

@@ -12,7 +12,8 @@ import {
   Menu,
   X,
   LogOut,
-  ClipboardCheck
+  ClipboardCheck,
+  BarChart3
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,6 +30,7 @@ const baseNavigation = [
   { name: "Review Queue", href: "/review-queue", icon: ClipboardCheck },
   { name: "GST Reports", href: "/gst-reports", icon: FileText },
   { name: "Financials", href: "/financials", icon: TrendingUp },
+  { name: "Accounting Reports", href: "/accounting-reports", icon: BarChart3 },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
 

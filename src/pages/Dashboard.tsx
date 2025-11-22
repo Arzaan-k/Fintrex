@@ -2,18 +2,22 @@ import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { 
-  Users, 
-  FileText, 
-  TrendingUp, 
+import {
+  Users,
+  FileText,
+  TrendingUp,
   Clock,
   ArrowUpRight,
   AlertCircle,
   DollarSign,
-  Loader2
+  Loader2,
+  MessageSquare,
+  CheckCircle,
+  Receipt
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
+import { getFinancialSummary } from "@/lib/financial-api";
 
 export default function Dashboard() {
   const [loading, setLoading] = useState(true);
@@ -21,9 +25,18 @@ export default function Dashboard() {
     totalClients: 0,
     documentsProcessed: 0,
     pendingReviews: 0,
-    monthlyRevenue: 0
+    monthlyRevenue: 0,
+    totalInvoices: 0,
+    unpaidInvoices: 0,
+    whatsappMessages: 0,
+    autoProcessed: 0,
+    totalAssets: 0,
+    totalLiabilities: 0,
+    netProfit: 0
   });
   const [recentClients, setRecentClients] = useState<any[]>([]);
+  const [recentInvoices, setRecentInvoices] = useState<any[]>([]);
+  const [financialSummary, setFinancialSummary] = useState<any>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -35,6 +48,7 @@ export default function Dashboard() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
+      // Fetch basic counts
       const { count: clientsCount } = await supabase
         .from("clients")
         .select("*", { count: "exact", head: true })
@@ -46,11 +60,12 @@ export default function Dashboard() {
         .eq("clients.accountant_id", user.id);
 
       const { count: pendingCount } = await supabase
-        .from("documents")
+        .from("review_queue")
         .select("*, clients!inner(*)", { count: "exact", head: true })
         .eq("clients.accountant_id", user.id)
         .eq("status", "pending");
 
+      // Fetch recent clients
       const { data: clients } = await supabase
         .from("clients")
         .select("*")
@@ -58,14 +73,93 @@ export default function Dashboard() {
         .order("created_at", { ascending: false })
         .limit(3);
 
+      // Fetch invoices data
+      const { data: invoices, count: invoicesCount } = await supabase
+        .from("invoices")
+        .select("*, clients!inner(*)", { count: "exact" })
+        .eq("accountant_id", user.id);
+
+      const { count: unpaidCount } = await supabase
+        .from("invoices")
+        .select("*, clients!inner(*)", { count: "exact", head: true })
+        .eq("accountant_id", user.id)
+        .eq("payment_status", "unpaid");
+
+      // Fetch recent invoices
+      const { data: recentInvoicesData } = await supabase
+        .from("invoices")
+        .select("*, clients(business_name)")
+        .eq("accountant_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(5);
+
+      // Fetch WhatsApp stats
+      const { count: whatsappCount } = await supabase
+        .from("whatsapp_messages")
+        .select("*, clients!inner(*)", { count: "exact", head: true })
+        .eq("clients.accountant_id", user.id);
+
+      // Fetch auto-processed documents (via WhatsApp)
+      const { count: autoProcessedCount } = await supabase
+        .from("documents")
+        .select("*, clients!inner(*)", { count: "exact", head: true })
+        .eq("clients.accountant_id", user.id)
+        .eq("upload_source", "whatsapp");
+
+      // Calculate financial aggregates
+      const totalSales = invoices?.filter(i => i.invoice_type === 'sales')
+        .reduce((sum, inv) => sum + (parseFloat(inv.total_amount) || 0), 0) || 0;
+
+      const totalPurchases = invoices?.filter(i => i.invoice_type === 'purchase')
+        .reduce((sum, inv) => sum + (parseFloat(inv.total_amount) || 0), 0) || 0;
+
+      // Get latest balance sheet for first client (as example)
+      let balanceSheetData: any = null;
+      let profitLossData: any = null;
+
+      if (clients && clients.length > 0) {
+        const firstClientId = clients[0].id;
+
+        const { data: latestBS } = await supabase
+          .from('balance_sheets')
+          .select('*')
+          .eq('client_id', firstClientId)
+          .order('as_of_date', { ascending: false })
+          .limit(1)
+          .single();
+
+        const { data: latestPL } = await supabase
+          .from('profit_loss_statements')
+          .select('*')
+          .eq('client_id', firstClientId)
+          .order('end_date', { ascending: false })
+          .limit(1)
+          .single();
+
+        balanceSheetData = latestBS;
+        profitLossData = latestPL;
+      }
+
       setStats({
         totalClients: clientsCount || 0,
         documentsProcessed: docsCount || 0,
         pendingReviews: pendingCount || 0,
-        monthlyRevenue: 240000
+        monthlyRevenue: totalSales,
+        totalInvoices: invoicesCount || 0,
+        unpaidInvoices: unpaidCount || 0,
+        whatsappMessages: whatsappCount || 0,
+        autoProcessed: autoProcessedCount || 0,
+        totalAssets: balanceSheetData?.total_assets || 0,
+        totalLiabilities: balanceSheetData?.total_liabilities || 0,
+        netProfit: profitLossData?.net_profit || 0
       });
 
       setRecentClients(clients || []);
+      setRecentInvoices(recentInvoicesData || []);
+      setFinancialSummary({
+        balanceSheet: balanceSheetData,
+        profitLoss: profitLossData
+      });
     } catch (error) {
       console.error("Error fetching dashboard data:", error);
     } finally {
@@ -92,6 +186,13 @@ export default function Dashboard() {
     );
   }
 
+  const formatCurrency = (amount: number) => {
+    if (amount >= 10000000) return `₹${(amount / 10000000).toFixed(2)}Cr`;
+    if (amount >= 100000) return `₹${(amount / 100000).toFixed(2)}L`;
+    if (amount >= 1000) return `₹${(amount / 1000).toFixed(2)}K`;
+    return `₹${amount.toFixed(0)}`;
+  };
+
   const statsData = [
     {
       name: "Total Clients",
@@ -102,12 +203,22 @@ export default function Dashboard() {
       color: "text-primary",
     },
     {
-      name: "Documents Processed",
-      value: stats.documentsProcessed.toString(),
+      name: "Total Invoices",
+      value: stats.totalInvoices.toString(),
+      subtitle: `${stats.unpaidInvoices} unpaid`,
       change: "+18%",
       trend: "up",
-      icon: FileText,
-      color: "text-secondary",
+      icon: Receipt,
+      color: "text-blue-600",
+    },
+    {
+      name: "WhatsApp Processed",
+      value: stats.autoProcessed.toString(),
+      subtitle: `${stats.whatsappMessages} messages`,
+      change: "+42%",
+      trend: "up",
+      icon: MessageSquare,
+      color: "text-green-600",
     },
     {
       name: "Pending Reviews",
@@ -118,11 +229,35 @@ export default function Dashboard() {
       color: "text-warning",
     },
     {
-      name: "Monthly Revenue",
-      value: `₹${(stats.monthlyRevenue / 1000).toFixed(1)}L`,
+      name: "Total Revenue",
+      value: formatCurrency(stats.monthlyRevenue),
       change: "+24%",
       trend: "up",
       icon: DollarSign,
+      color: "text-secondary",
+    },
+    {
+      name: "Total Assets",
+      value: formatCurrency(stats.totalAssets),
+      change: "+15%",
+      trend: "up",
+      icon: TrendingUp,
+      color: "text-primary",
+    },
+    {
+      name: "Net Profit",
+      value: formatCurrency(stats.netProfit),
+      change: stats.netProfit >= 0 ? "+28%" : "-12%",
+      trend: stats.netProfit >= 0 ? "up" : "down",
+      icon: CheckCircle,
+      color: stats.netProfit >= 0 ? "text-green-600" : "text-red-600",
+    },
+    {
+      name: "Documents Processed",
+      value: stats.documentsProcessed.toString(),
+      change: "+32%",
+      trend: "up",
+      icon: FileText,
       color: "text-secondary",
     },
   ];
@@ -136,8 +271,8 @@ export default function Dashboard() {
         </p>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-        {statsData.map((stat) => {
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        {statsData.map((stat: any) => {
           const Icon = stat.icon;
           return (
             <Card key={stat.name} className="p-6 hover:shadow-lg transition-shadow">
@@ -147,6 +282,9 @@ export default function Dashboard() {
                     {stat.name}
                   </p>
                   <p className="text-2xl font-bold">{stat.value}</p>
+                  {stat.subtitle && (
+                    <p className="text-xs text-muted-foreground">{stat.subtitle}</p>
+                  )}
                 </div>
                 <div className={`p-3 rounded-full bg-muted ${stat.color}`}>
                   <Icon className="h-6 w-6" />
@@ -224,6 +362,55 @@ export default function Dashboard() {
                 </div>
               );
             })}
+          </div>
+        )}
+      </Card>
+
+      <Card className="p-6">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-semibold">Recent Invoices</h2>
+          <Button variant="ghost" size="sm" onClick={() => navigate("/invoices")}>
+            View All
+            <ArrowUpRight className="ml-2 h-4 w-4" />
+          </Button>
+        </div>
+
+        {recentInvoices.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground">
+            <Receipt className="h-12 w-12 mx-auto mb-4 opacity-50" />
+            <p>No invoices yet. Process your first invoice via WhatsApp!</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {recentInvoices.map((invoice: any) => (
+              <div
+                key={invoice.id}
+                className="flex items-center justify-between p-4 rounded-lg bg-muted/50 hover:bg-muted transition-colors cursor-pointer"
+                onClick={() => navigate(`/invoices?id=${invoice.id}`)}
+              >
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <h3 className="font-medium">{invoice.invoice_number}</h3>
+                    <Badge variant={invoice.invoice_type === 'sales' ? 'default' : 'secondary'}>
+                      {invoice.invoice_type}
+                    </Badge>
+                    <Badge variant={
+                      invoice.payment_status === 'paid' ? 'default' :
+                      invoice.payment_status === 'unpaid' ? 'destructive' : 'secondary'
+                    }>
+                      {invoice.payment_status}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                    <span>{invoice.clients?.business_name || invoice.vendor_name || 'N/A'}</span>
+                    <span>{new Date(invoice.invoice_date).toLocaleDateString()}</span>
+                    <span className="font-medium text-foreground">
+                      {formatCurrency(parseFloat(invoice.total_amount))}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </Card>

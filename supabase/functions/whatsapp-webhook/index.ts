@@ -774,6 +774,38 @@ async function processDocument(
 
     const extractData = await extractResponse.json();
 
+    // Create invoice record from extracted data
+    if (extractData.success && extractData.invoice) {
+      console.log('📊 Creating invoice record from extracted data...');
+
+      const createInvoiceResponse = await fetch(`${SUPABASE_URL}/functions/v1/create-invoice-from-extraction`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          documentId: document.id,
+          extractedData: extractData.invoice,
+          clientId: clientId,
+          accountantId: accountantId,
+          overallConfidence: extractData.confidence_report?.overall_confidence || 0,
+        }),
+      });
+
+      if (createInvoiceResponse.ok) {
+        const invoiceData = await createInvoiceResponse.json();
+        console.log(`✅ Invoice created: ${invoiceData.invoice?.id}`);
+
+        // Add invoice info to extract data for display
+        extractData.invoice_id = invoiceData.invoice?.id;
+        extractData.auto_approved = invoiceData.invoice?.auto_generated || false;
+      } else {
+        console.error('Failed to create invoice:', await createInvoiceResponse.text());
+        // Continue anyway - invoice can be created manually later
+      }
+    }
+
     await sendExtractionResults(phoneNumberId, from, document.id, extractData, supabase);
 
   } catch (error) {
