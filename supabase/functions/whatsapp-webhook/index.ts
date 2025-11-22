@@ -758,6 +758,15 @@ async function processDocument(
     }
 
     const ocrData = await ocrResponse.json();
+    console.log('📄 OCR Response:', JSON.stringify(ocrData));
+
+    // Check if OCR succeeded
+    if (!ocrData.success || !ocrData.text) {
+      console.error('❌ OCR failed or returned no text:', ocrData);
+      throw new Error(`OCR failed: ${ocrData.error || 'No text extracted'}`);
+    }
+
+    console.log(`✅ OCR successful: ${ocrData.text.length} characters extracted via ${ocrData.provider}`);
 
     // Call extraction function
     const extractResponse = await fetch(`${SUPABASE_URL}/functions/v1/extract-invoice`, {
