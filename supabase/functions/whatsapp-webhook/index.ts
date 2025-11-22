@@ -730,6 +730,13 @@ async function processDocument(
     }
 
     // For invoices and receipts, perform OCR and extraction
+    // Get public URL for the uploaded file
+    const { data: urlData } = supabase.storage
+      .from('documents')
+      .getPublicUrl(path);
+
+    const fileUrl = urlData.publicUrl;
+
     // Call OCR function
     const ocrResponse = await fetch(`${SUPABASE_URL}/functions/v1/ocr-secure`, {
       method: 'POST',
@@ -738,8 +745,9 @@ async function processDocument(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        documentId: document.id,
-        filePath: path,
+        fileUrl: fileUrl,
+        fileName: filename,
+        provider: 'auto',
       }),
     });
 
