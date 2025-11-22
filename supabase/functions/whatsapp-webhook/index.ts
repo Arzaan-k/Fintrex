@@ -179,9 +179,17 @@ async function sendExtractionResults(
   extractData: any,
   supabase: any
 ) {
-  const { extracted_data, overall_confidence, auto_approved } = extractData;
+  // Extract data from the correct structure returned by extract-invoice function
+  const invoice = extractData.invoice || {};
+  const confidenceReport = extractData.confidence_report || {};
+  const shouldAutoApprove = confidenceReport.should_auto_approve || false;
+  const overallConfidence = confidenceReport.overall_confidence || 0;
 
-  if (auto_approved) {
+  // Get vendor name from nested structure
+  const vendorName = invoice.vendor?.legal_name || 'N/A';
+  const grandTotal = invoice.tax_summary?.grand_total || 0;
+
+  if (shouldAutoApprove) {
     await sendWhatsAppMessage(phoneNumberId, to, {
       type: "interactive",
       interactive: {
@@ -189,11 +197,11 @@ async function sendExtractionResults(
         body: {
           text: `✅ *Invoice Processed Successfully!*\n\n` +
                 `📄 *Invoice Details:*\n` +
-                `Invoice No: ${extracted_data?.invoice_number || 'N/A'}\n` +
-                `Date: ${extracted_data?.invoice_date || 'N/A'}\n` +
-                `Vendor: ${extracted_data?.vendor_name || 'N/A'}\n` +
-                `Amount: ₹${extracted_data?.grand_total || '0'}\n\n` +
-                `🎯 Confidence: ${Math.round((overall_confidence || 0) * 100)}%\n\n` +
+                `Invoice No: ${invoice.invoice_number || 'N/A'}\n` +
+                `Date: ${invoice.invoice_date || 'N/A'}\n` +
+                `Vendor: ${vendorName}\n` +
+                `Amount: ₹${grandTotal}\n\n` +
+                `🎯 Confidence: ${Math.round(overallConfidence * 100)}%\n\n` +
                 `Your invoice has been automatically approved and added to your books! 📊`,
         },
         action: {
@@ -235,11 +243,11 @@ async function sendExtractionResults(
           text: `⚠️ *Review Required*\n\n` +
                 `I've extracted the following details:\n\n` +
                 `📄 *Invoice Details:*\n` +
-                `Invoice No: ${extracted_data?.invoice_number || 'N/A'}\n` +
-                `Date: ${extracted_data?.invoice_date || 'N/A'}\n` +
-                `Vendor: ${extracted_data?.vendor_name || 'N/A'}\n` +
-                `Amount: ₹${extracted_data?.grand_total || '0'}\n\n` +
-                `🎯 Confidence: ${Math.round((overall_confidence || 0) * 100)}%\n\n` +
+                `Invoice No: ${invoice.invoice_number || 'N/A'}\n` +
+                `Date: ${invoice.invoice_date || 'N/A'}\n` +
+                `Vendor: ${vendorName}\n` +
+                `Amount: ₹${grandTotal}\n\n` +
+                `🎯 Confidence: ${Math.round(overallConfidence * 100)}%\n\n` +
                 `Please verify the details are correct.`,
         },
         action: {
